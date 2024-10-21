@@ -2,8 +2,8 @@
 Code for analysing TwinsUK sperm and blood NanoSeq data from 'Sperm sequencing reveals extensive positive selection in the male germline'
 
 ## Data Processing
-Rmd scripts in dataProcessing are used to generate all main data files used for results and plotting. This is split by:
-- `RE_nanoseq.Rmd` for processing sperm and blood RE NanoSeq data
+Sequencing data was processed using the NanoSeq scripts at https://github.com/cancerit/NanoSeq. Following that the following two Rmd scripts in dataProcessing are used to generate all main data files used for results and plotting:
+- `RE_nanoseq.Rmd` for processing sperm and blood restriction enzyme (RE) genome NanoSeq data
 - `targ_exome_nanoseq.Rmd` for processing sperm targeted and exome NanoSeq data
 
 ## Plotting
