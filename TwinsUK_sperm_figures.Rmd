@@ -1,0 +1,1029 @@
+---
+title: "nanoseqDataPrep"
+author: "Matt Neville"
+date: "17/01/2022"
+output: html_document
+---
+
+# Setup
+## Paths/Libraries
+```{r parameters}
+#Input paths
+inputPublic <- "PublicTwinsUKCode/dataPublic/"
+inputControlled <- "PublicTwinsUKCode/dataControlled/"
+outputPath <- "PublicTwinsUKCode/output/"
+
+library(egg)
+library(scales)
+library(readxl)
+library(ggh4x)
+library(ggrepel)
+library(patchwork)
+library(RColorBrewer)
+library(ggbeeswarm)
+library(stringi)
+library(jpeg)
+library(ggforce)
+library(ggpubr)
+library(gt)
+library(ggpattern)
+library(lme4)
+library(bootpredictlme4)
+library(tidyverse)
+```
+
+## Data Sperm+Blood RE 
+```{r samples}
+reSamplesTwinsUKmeta <- read_tsv(paste0(inputControlled,"reSamplesTwinsUKFiltered.tsv"), col_types = cols()) 
+spermCounts <- read_tsv(paste0(inputControlled, "spermCounts.tsv"), col_types = cols()) 
+normStain <- readJPEG(paste0(inputControlled, "Norm200_100um.jpg"))
+oligoStain <- readJPEG(paste0(inputControlled, "Oligo_100um.jpg"))
+azooStain <- readJPEG(paste0(inputControlled, "Azoo_100um.jpg"))
+maskedCounts <- read_tsv(paste0(inputControlled, "maskedCounts.tsv"), col_types = cols()) 
+analysisREvars <- read_tsv(paste0(inputControlled,"reVariantsFiltered.tsv"), col_types = cols()) |> 
+  left_join(reSamplesTwinsUKmeta |> select(PD_ID, tissue, age_at_sampling), by = "PD_ID")
+
+burdenSummary <- read_tsv(paste0(inputControlled, "reBurdensFiltered.tsv"), col_types = cols()) |> 
+  left_join(reSamplesTwinsUKmeta, by = "PD_ID") |> mutate(burden = burdenCorr)
+
+covSummary <- read_tsv(paste0(inputControlled, "reCovStats.txt"), col_types = cols(), col_names = c("bpUnique","bpTotal", "mean", "PD_ID"))
+
+reSignatures <- read_tsv(paste0(inputControlled, "Decompose_Solution_Activities.txt"), col_types = cols())
+
+pat_dnmsData <- read_csv(paste0(inputPublic, "second_gen.dnms.summary.csv"), col_types = cols()) 
+testisBurdenData <- read_tsv(paste0(inputPublic, "testisBurdenCorr.tsv"), col_types = cols())
+testisIndels <- read_tsv(paste0(inputPublic, "panBodyMuts.tsv"), col_types = cols())
+
+
+```
+
+## Data Sperm Targ+Exome
+```{r samples}
+covSummaryTarg <- read_tsv(paste0(inputControlled, "covSummaryTargMerged.tsv"), col_types = cols())
+burdenCombinedCoding <- read_tsv(paste0(inputControlled, "burdenCombinedCoding.tsv"), col_types = cols())
+
+
+
+```
+
+# Main figures
+## Figure 1
+### Model metrics function
+```{r metrics}
+# For lmer
+metricsText <- function(model, roundTo) {
+  print(paste0("Slope of ", round(fixef(model)[2], roundTo), " * Age (95% CI: ", round(confint(model)[4,1], roundTo), "-", round(confint(model)[4,2], roundTo), ")"))
+  print(paste0("Intercept of ", round(fixef(model)[1], roundTo), " (95% CI: ", round(confint(model)[3,1], roundTo), "-", round(confint(model)[3,2], roundTo), ")"))
+}
+
+# get max X and Y values for plot limits
+metricsLabel <- function(model, roundTo) {
+  coef1 <- sprintf("%.0f", fixef(model)[1])
+  coef2 <- sprintf("%.*f", roundTo, fixef(model)[2])
+  
+  label <- paste(coef1, "+", coef2, "x age")
+  return(label)
+}
+
+# get max X and Y values for plot limits
+metricsLabelInd <- function(model, roundTo) {
+  coef1 <- sprintf("%.1f", fixef(model)[1])
+  coef2 <- sprintf("%.*f", roundTo, fixef(model)[2])
+  
+  label <- paste(coef1, "+", coef2, "x age")
+  return(label)
+}
+```
+
+### SNV models
+#### Sperm Age Effect
+```{r spermAgeEffect}
+#DNMs from 3 gen quinlan paper
+pat_dnms <- pat_dnmsData |> 
+  # Multiply to get full genome estimate
+  mutate(burden = dad_dnms_auto_snv*(2861326455/autosomal_callable_fraction)) |> 
+  mutate(indelBurden = (dad_dnms_auto - dad_dnms_auto_snv)*(2861326455/autosomal_callable_fraction)) |> 
+  mutate(age_at_sampling = dad_age) |> 
+  select(burden, indelBurden, age_at_sampling, paternal_id)
+
+spermSummary <- burdenSummary |> 
+  filter(tissue == "Sperm") |> 
+  mutate(burden = round(burden * 2861326455)) |> 
+  mutate(indelBurden = indelBurden * 2861326455) 
+
+testisBurdens <- testisBurdenData |> 
+  mutate(burden = burdenTriClonal * 2861326455) |> 
+  mutate(indiv_ID = str_sub(Sample, 1, 7))
+  
+# Regression: SNVs
+pat_dnms_lmer <- lmer(burden ~ age_at_sampling+ (age_at_sampling - 1|paternal_id), data=pat_dnms,REML=F)
+sperm_lmer <- lmer(burden ~ age_at_sampling + (age_at_sampling - 1|indiv_ID),data=spermSummary,REML=F) 
+testis_lmer <- lmer(burden ~ age_at_sampling + (age_at_sampling - 1|indiv_ID),data=testisBurdens,REML=F)
+
+# Text
+suppressMessages(metricsText(pat_dnms_lmer, 2)) 
+suppressMessages(metricsText(sperm_lmer, 2)) 
+suppressMessages(metricsText(testis_lmer, 2)) 
+
+# Calculate conf. intervals with bootstrapping (bootpredictlme4) - for plotting purposes
+ages = seq(from=14,to=60,by=7)
+nsim = 100
+pat_dnms_lmer_simul = sapply(ages,function(x) predict(pat_dnms_lmer, newdata=data.frame(age_at_sampling=x), 
+                             re.form=NA, se.fit=TRUE, nsim=nsim)$ci.fit[,1])
+pat_dnms_CIs <- tibble(age_at_sampling = ages, ci_lo = pat_dnms_lmer_simul[1,], ci_hi = pat_dnms_lmer_simul[2,])
+
+ages = seq(from=14,to=100,by=7)
+sperm_lmer_simul = sapply(ages,function(x) predict(sperm_lmer, newdata=data.frame(age_at_sampling=x), 
+                             re.form=NA, se.fit=TRUE, nsim=nsim)$ci.fit[,1])
+sperm_CIs <- tibble(age_at_sampling = ages, ci_lo = sperm_lmer_simul[1,], ci_hi = sperm_lmer_simul[2,])
+
+testis_lmer_simul = sapply(ages,function(x) predict(testis_lmer, newdata=data.frame(age_at_sampling=x), 
+                             re.form=NA, se.fit=TRUE, nsim=nsim)$ci.fit[,1])
+testis_CIs <- tibble(age_at_sampling = ages, ci_lo = testis_lmer_simul[1,], ci_hi = testis_lmer_simul[2,])
+
+
+# Add label
+pat_dnms$label = paste("Trio paternal DNMs\n(Sasani et al, 2019)\n=", metricsLabel(pat_dnms_lmer,2))
+pat_dnms_CIs$label = paste("Trio paternal DNMs\n(Sasani et al, 2019)\n=", metricsLabel(pat_dnms_lmer,2))
+spermSummary$label =  paste("Sperm NanoSeq\n=", metricsLabel(sperm_lmer,2))
+sperm_CIs$label =  paste("Sperm NanoSeq\n=", metricsLabel(sperm_lmer,2))
+testisBurdens$label = paste("Testis clonal variants\n(Moore et al, 2021)\n=", metricsLabel(testis_lmer,2))
+testis_CIs$label = paste("Testis clonal variants\n(Moore et al, 2021)\n=", metricsLabel(testis_lmer,2))
+
+
+# get min and max X and Y values for plot limits
+max_age = 87
+max_dnm = max(c(max(pat_dnms$burden), max(spermSummary$burden), max(testisBurdens$burden))) + 5
+
+spermColours <- c("#74add1", "#f46d43", "#bebada")
+
+p_SpermTestisEff  <- ggplot(spermSummary |> bind_rows(pat_dnms) |> bind_rows(testisBurdens), aes(colour = label, fill = label)) +
+  # plot confidence bands
+  geom_ribbon(data = pat_dnms_CIs, aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  geom_ribbon(data = sperm_CIs, aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  geom_ribbon(data = testis_CIs, aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  # plot the raw data
+  geom_boxplot(data = testisBurdens, aes(x=age_at_sampling, y=burden, group = age_at_sampling), show.legend = F, outlier.shape = NA, width = 1) +
+  geom_point(data = pat_dnms, aes(x=age_at_sampling, y=burden), size=3.5, pch=21, col='white', stroke=0.25, alpha = 0.5) +
+  geom_point(data = spermSummary, aes(x=age_at_sampling, y=burden), size=3.5, pch=21, col='white', stroke=0.25) +
+  # plot the predictions from the fitted GLM
+  geom_abline(intercept = fixef(pat_dnms_lmer)[1], slope = fixef(pat_dnms_lmer)[2], col = spermColours[2], lty = 2) +
+  geom_abline(intercept = fixef(sperm_lmer)[1], slope = fixef(sperm_lmer)[2], col = spermColours[1], lty = 2) +
+  geom_abline(intercept = fixef(testis_lmer)[1], slope = fixef(testis_lmer)[2], col = spermColours[3], lty = 2) +
+
+  scale_color_manual(values = spermColours, breaks = c(spermSummary$label[1], pat_dnms$label[1], testisBurdens$label[1])) +
+  scale_fill_manual(values = spermColours, breaks = c(spermSummary$label[1], pat_dnms$label[1], testisBurdens$label[1])) +
+  scale_x_continuous(expand = c(0,0), limits = c(-2, max_age)) +
+  scale_y_continuous(expand = c(0,0), limits = c(-10, max_dnm)) +
+  xlab('Age (years)') + 
+    ylab('Substitutions per haploid cell') +  
+    theme_pubr() +
+  theme(legend.key.height = unit(1.5, "cm"), legend.title= element_blank(), legend.position = c(0.2,0.85), legend.text = element_text(size  = 12), legend.background = element_blank())
+p_SpermTestisEff
+```
+
+#### Blood Age Effect
+```{r bloodAgeEffect, fig.height=5, fig.width=6}
+bloodNano <-  burdenSummary |> 
+  filter(tissue == "Blood") |> 
+  mutate(burden = round(burden * 2861326455 * 2)) |> 
+  mutate(indelBurden = round(indelBurden * 2861326455 * 2))
+
+# Regression:
+bloodNano_lmer <- lmer(burden ~ age_at_sampling + (age_at_sampling - 1|indiv_ID),data=bloodNano,REML=F)
+# Text
+suppressMessages(metricsText(bloodNano_lmer, 2)) 
+
+
+# Calculate conf. intervals with bootstrapping - for plotting purposes
+ages = seq(from=14,to=100,by=7)
+nsim = 100
+bloodNano_lmer_simul = sapply(ages,function(x) predict(bloodNano_lmer, newdata=data.frame(age_at_sampling=x), 
+                             re.form=NA, se.fit=TRUE, nsim=nsim)$ci.fit[,1])
+bloodNano_CIs <- tibble(age_at_sampling = ages, ci_lo = bloodNano_lmer_simul[1,], ci_hi = bloodNano_lmer_simul[2,])
+
+
+# Add labels
+bloodNano$label = paste("Blood NanoSeq\n=", metricsLabel(bloodNano_lmer,1))
+bloodNano_CIs$label = paste("Blood NanoSeq\n=", metricsLabel(bloodNano_lmer,1))
+
+max_age = max(bloodNano$age_at_sampling)+ 5
+max_burden = max(bloodNano$burden) + 200
+
+
+bloodColours <- c("#d73027", "#f46d43")
+
+bloodEffNano <- ggplot(bloodNano, aes(colour = label, fill = label)) +
+  # plot confidence bands
+  geom_ribbon(data = bloodNano_CIs, aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  # plot the data points
+  geom_point(data = bloodNano, aes(x=age_at_sampling, y=burden), size=3.5, pch=21, col='white', stroke=0.25) +
+  # plot the predictions from the fitted model
+  geom_abline(intercept = fixef(bloodNano_lmer)[1], slope = fixef(bloodNano_lmer)[2], col = bloodColours[1], lty = 2) +
+  scale_color_manual(values = bloodColours) +
+  scale_fill_manual(values = bloodColours) +
+  scale_x_continuous(expand = c(0,0), limits = c(-2, 91)) +
+  scale_y_continuous(expand = c(0,0), limits = c(-50, max_burden)) +
+  # aesthetics for the plot
+  xlab('Age (years)') + 
+  ylab('Substitutions per diploid cell') + 
+  theme_pubr() +
+  theme(legend.key.height = unit(1.5, "cm"), legend.title= element_blank(), legend.position = c(0.25,0.75), legend.text = element_text(size  = 12), legend.background = element_blank())
+bloodEffNano
+
+# Add comparison to Machado et al. 2022 paper
+bloodRegressionsSNV <- tibble(int = c(105, 215, 1139, 164, 382),
+                           eff = c(16, 15, 17, 22, 25),
+                           type = c("HSPC", "Naive B", "Memory B", "Naive T", "Memory T")) |> 
+  mutate(lab = paste0(type, " = ", as.character(int), " + ", as.character(eff), " x age")) |> 
+  mutate(lab = factor(lab, levels = lab[order(int, decreasing = TRUE)]))
+
+
+regressionColours <- c("#46237a", "#256eff", "#3ddc97", "#9b3d12", "#c1df1f")
+
+
+bloodEff_comp <- ggplot(bloodNano |> mutate(label = paste("Whole Blood =", metricsLabel(bloodNano_lmer,1))), aes(fill = label)) +
+  geom_abline(data = bloodRegressionsSNV, aes(intercept = int, slope = eff, col = lab), lty = 3, linewidth = 2) +
+  # plot confidence bands
+  geom_ribbon(data = bloodNano_CIs |> mutate(label = paste("Whole Blood =", metricsLabel(bloodNano_lmer,1))), aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  # plot the data points
+  geom_point(data = bloodNano |> mutate(label = paste("Whole Blood =", metricsLabel(bloodNano_lmer,1))), aes(x=age_at_sampling, y=burden), size=2.5, pch=21, col='white', alpha=0.25, stroke=0.25) +
+  # plot the predictions from the fitted model
+  geom_abline(intercept = fixef(bloodNano_lmer)[1], slope = fixef(bloodNano_lmer)[2], col = bloodColours[1], lty = 2) +
+  scale_color_manual(values = regressionColours, name = "Machado et al. 2022") +
+  scale_fill_manual(values = c("#d73027"), name = "") +
+
+  scale_x_continuous(expand = c(0,0), limits = c(-2, 91)) +
+  scale_y_continuous(expand = c(0,0), limits = c(-5, 2500)) +
+  # aesthetics for the plot
+  xlab('Age (years)') + 
+  ylab('Substitutions per diploid cell') + 
+  theme_pubr() +
+  theme(legend.position = c(0.25,0.85), legend.text = element_text(size  = 12), 
+        legend.background = element_blank()) + 
+  guides(color = guide_legend(order = 2), fill = guide_legend(order = 1))
+
+bloodEff_comp 
+
+```
+
+### Indel models
+#### Sperm Age Effect Indel
+```{r spermAgeEffectIndel}
+pat_dnms_ind <- pat_dnms 
+sperm_ind <- spermSummary
+testis_ind <- testisIndels |> 
+  filter(TissueType1 == "testis" & Seq_X > 15) |> 
+  drop_na(Indel_Burden_clonal2) |> 
+  mutate(indelBurden = (Indel_Burden_clonal2/CallableSize) * 2861326455) |> 
+  select(indiv_ID = DonorID, age_at_sampling = Age, indelBurden)
+
+# Regression: Indels
+indel_pat_dnms_lmer <- lmer(indelBurden ~ age_at_sampling+ (age_at_sampling - 1|paternal_id), data=pat_dnms_ind,REML=F)
+indel_sperm_lmer <- lmer(indelBurden ~ age_at_sampling + (age_at_sampling - 1|indiv_ID),data=sperm_ind,REML=F) 
+indel_testis_lmer <- lmer(indelBurden ~ age_at_sampling + (age_at_sampling - 1|indiv_ID),data=testis_ind,REML=F)
+
+# Text
+suppressMessages(metricsText(indel_pat_dnms_lmer, 2))
+suppressMessages(metricsText(indel_sperm_lmer, 2))
+suppressMessages(metricsText(indel_testis_lmer, 2)) 
+
+# Calculate conf. intervals with bootstrapping (bootpredictlme4) - for plotting purposes
+ages = seq(from=14,to=60,by=7)
+nsim = 100
+indel_pat_dnms_lmer_simul = sapply(ages,function(x) predict(indel_pat_dnms_lmer, newdata=data.frame(age_at_sampling=x), 
+                             re.form=NA, se.fit=TRUE, nsim=nsim)$ci.fit[,1])
+indel_pat_dnms_CIs <- tibble(age_at_sampling = ages, ci_lo = indel_pat_dnms_lmer_simul[1,], ci_hi = indel_pat_dnms_lmer_simul[2,])
+ages = seq(from=14,to=100,by=7)
+indel_sperm_lmer_simul = sapply(ages,function(x) predict(indel_sperm_lmer, newdata=data.frame(age_at_sampling=x), 
+                             re.form=NA, se.fit=TRUE, nsim=nsim)$ci.fit[,1])
+indel_sperm_CIs <- tibble(age_at_sampling = ages, ci_lo = indel_sperm_lmer_simul[1,], ci_hi = indel_sperm_lmer_simul[2,])
+
+indel_testis_lmer_simul = sapply(ages,function(x) predict(indel_testis_lmer, newdata=data.frame(age_at_sampling=x), 
+                             re.form=NA, se.fit=TRUE, nsim=nsim)$ci.fit[,1])
+indel_testis_CIs <- tibble(age_at_sampling = ages, ci_lo = indel_testis_lmer_simul[1,], ci_hi = indel_testis_lmer_simul[2,])
+
+
+# Add label
+pat_dnms_ind$label = paste("Trio paternal DNMs\n(Sasani et al, 2019)\n=", metricsLabelInd(indel_pat_dnms_lmer,2))
+indel_pat_dnms_CIs$label = paste("Trio paternal DNMs\n(Sasani et al, 2019)\n=", metricsLabelInd(indel_pat_dnms_lmer,2))
+sperm_ind$label =  paste("Sperm NanoSeq\n=", metricsLabelInd(indel_sperm_lmer,2))
+indel_sperm_CIs$label =  paste("Sperm NanoSeq\n=", metricsLabelInd(indel_sperm_lmer,2))
+testis_ind$label = paste("Testis clonal variants\n(Moore et al, 2021)\n=", metricsLabelInd(indel_testis_lmer,2))
+indel_testis_CIs$label = paste("Testis clonal variants\n(Moore et al, 2021)\n=", metricsLabelInd(indel_testis_lmer,2))
+
+
+# get min and max X and Y values for plot limits
+max_ageInd = 87
+max_dnmInd = max(c(max(pat_dnms_ind$indelBurden), max(sperm_ind$indelBurden), max(testis_ind$indelBurden)))
+
+spermColours <- c("#74add1", "#f46d43", "#bebada")
+
+
+p_SpermEffIndels <- ggplot(sperm_ind |> bind_rows(pat_dnms_ind) |> bind_rows(testis_ind), aes(colour = label, fill = label)) +
+  # plot confidence bands
+  geom_ribbon(data = indel_pat_dnms_CIs, aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  geom_ribbon(data = indel_sperm_CIs, aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  geom_ribbon(data = indel_testis_CIs, aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  # plot the raw data
+  geom_boxplot(data = testis_ind, aes(x=age_at_sampling, y=indelBurden, group = age_at_sampling), show.legend = F, outlier.shape = NA, width = 1) +
+  geom_point(data = pat_dnms_ind, aes(x=age_at_sampling, y=indelBurden), size=3.5, pch=21, col='white', stroke=0.25, alpha = 0.5) +
+  geom_point(data = sperm_ind, aes(x=age_at_sampling, y=indelBurden), size=3.5, pch=21, col='white', stroke=0.25) +
+  # plot the predictions from the fitted GLM
+  geom_abline(intercept = fixef(indel_pat_dnms_lmer)[1], slope = fixef(indel_pat_dnms_lmer)[2], col = spermColours[2], lty = 2) +
+  geom_abline(intercept = fixef(indel_sperm_lmer)[1], slope = fixef(indel_sperm_lmer)[2], col = spermColours[1], lty = 2) +
+  geom_abline(intercept = fixef(indel_testis_lmer)[1], slope = fixef(indel_testis_lmer)[2], col = spermColours[3], lty = 2) +
+
+  scale_color_manual(values = spermColours, breaks = c(sperm_ind$label[1], pat_dnms_ind$label[1], testis_ind$label[1])) +
+  scale_fill_manual(values = spermColours, breaks = c(sperm_ind$label[1], pat_dnms_ind$label[1], testis_ind$label[1])) +
+  scale_x_continuous(expand = c(0,0), limits = c(-2, max_ageInd)) +
+  scale_y_continuous(expand = c(0,0), limits = c(-1, max_dnmInd)) +
+  xlab('Age (years)') + 
+    ylab('Indels per haploid cell') +  
+    theme_pubr() +
+  theme(legend.key.height = unit(1.5, "cm"), legend.title= element_blank(), legend.position = c(0.2,0.85), legend.text = element_text(size  = 12), legend.background = element_blank())
+p_SpermEffIndels
+
+
+```
+
+#### Blood Age Effect Indel
+```{r bloodAgeEffectIndel, fig.height=5, fig.width=6}
+
+bloodNano_ind <-  bloodNano
+
+# Regression:
+
+ind_bloodNano_lmer <- lmer(indelBurden ~ age_at_sampling + (age_at_sampling - 1|indiv_ID),data=bloodNano_ind,REML=F)
+suppressMessages(metricsText(ind_bloodNano_lmer, 1)) 
+
+# Calculate conf. intervals with bootstrapping (bootpredictlme4) - for plotting purposes
+ages = seq(from=14,to=100,by=7)
+nsim = 100
+
+ind_bloodNano_lmer_simul = sapply(ages,function(x) predict(ind_bloodNano_lmer, newdata=data.frame(age_at_sampling=x), 
+                             re.form=NA, se.fit=TRUE, nsim=nsim)$ci.fit[,1])
+ind_bloodNano_CIs <- tibble(age_at_sampling = ages, ci_lo = ind_bloodNano_lmer_simul[1,], ci_hi = ind_bloodNano_lmer_simul[2,])
+
+# Add labels
+bloodNano_ind$label = paste("Blood NanoSeq\n=", metricsLabel(ind_bloodNano_lmer,1))
+ind_bloodNano_CIs$label = paste("Blood NanoSeq\n=", metricsLabel(ind_bloodNano_lmer,1))
+
+max_age = max(bloodNano_ind$age_at_sampling) + 5
+max_burden = max(bloodNano_ind$indelBurden) + 20
+
+bloodColours <- c("#d73027")
+
+bloodEff_ind <- ggplot(bloodNano_ind, aes(fill = label)) +
+  # plot confidence bands
+  geom_ribbon(data = ind_bloodNano_CIs, aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  # plot the data points
+  geom_point(data = bloodNano_ind, aes(x=age_at_sampling, y=indelBurden), size=3.5, pch=21, col='white', stroke=0.25) +
+  # plot the predictions from the fitted model
+  geom_abline(intercept = fixef(ind_bloodNano_lmer)[1], slope = fixef(ind_bloodNano_lmer)[2], col = bloodColours[1], lty = 2) +
+  scale_color_manual(values = regressionColours) +
+  scale_fill_manual(values = bloodColours) +
+
+  scale_x_continuous(expand = c(0,0), limits = c(-2, 91)) +
+  scale_y_continuous(expand = c(0,0), limits = c(-5, max_burden)) +
+  # aesthetics for the plot
+  xlab('Age (years)') + 
+  ylab('Indels per diploid cell') + 
+  theme_pubr() +
+  theme(legend.position = c(0.25,0.75), legend.text = element_text(size  = 12), 
+        legend.background = element_blank(), legend.title = element_blank())
+
+bloodEff_ind 
+
+# Add comparison to Machado et al. 2022 paper
+bloodRegressions <- tibble(int = c(-4.1, 7.4, 36.1, 5.8, 14.7),
+                           eff = c(0.7, 0.8, 0.8, 1.1, 1.0),
+                           type = c("HSPC", "Naive B", "Memory B", "Naive T", "Memory T")) |> 
+  mutate(lab = paste0(type, " = ", as.character(int), " + ", as.character(eff), " x age")) |> 
+  mutate(lab = factor(lab, levels = lab[order(int, decreasing = TRUE)]))
+
+
+regressionColours <- c("#46237a", "#256eff", "#3ddc97", "#9b3d12", "#c1df1f")
+
+bloodEff_ind_comp <- ggplot(bloodNano_ind |> mutate(label = paste("Whole Blood =", metricsLabel(ind_bloodNano_lmer,1))), aes(fill = label)) +
+  geom_abline(data = bloodRegressions, aes(intercept = int, slope = eff, col = lab), lty = 3, linewidth = 2) +
+  # plot confidence bands
+  geom_ribbon(data = ind_bloodNano_CIs|> mutate(label = paste("Whole Blood =", metricsLabel(ind_bloodNano_lmer,1))), aes(x=age_at_sampling, ymin=ci_lo, ymax=ci_hi), alpha=0.25, show.legend = F, colour = NA) +
+  # plot the data points
+  geom_point(data = bloodNano_ind |> mutate(label =paste("Whole Blood =", metricsLabel(ind_bloodNano_lmer,1))), aes(x=age_at_sampling, y=indelBurden), size=2.5, pch=21, col='white', alpha=0.25, stroke=0.25) +
+  # plot the predictions from the fitted model
+  geom_abline(intercept = fixef(ind_bloodNano_lmer)[1], slope = fixef(ind_bloodNano_lmer)[2], col = bloodColours[1], lty = 2) +
+  scale_fill_manual(values = bloodColours, name = "") +
+  scale_color_manual(values = regressionColours, name = "Machado et al. 2022") +
+ 
+
+  scale_x_continuous(expand = c(0,0), limits = c(-2, 91)) +
+  scale_y_continuous(expand = c(0,0), limits = c(-5, max_burden)) +
+  # aesthetics for the plot
+  xlab('Age (years)') + 
+  ylab('Indels per diploid cell') + 
+  theme_pubr() +
+  theme(legend.position = c(0.25,0.85), legend.text = element_text(size  = 12), 
+        legend.background = element_blank()) + 
+  guides(color = guide_legend(order = 2), fill = guide_legend(order = 1))
+
+bloodEff_ind_comp 
+
+```
+
+### Mut Ratios
+```{r ratio, fig.width=2, fig.height=3}
+ratioBurden <- burdenSummary |> select(PD_ID, tissue, age_at_sampling, burden) |> 
+  mutate(indiv = str_sub(PD_ID, 1,7)) |> mutate(burdenPerYear = burden/age_at_sampling) |> 
+  group_by(indiv, tissue) |> summarize(burdenPerYear = mean(burdenPerYear), .groups = "drop") |> 
+  pivot_wider(names_from= tissue, values_from = burdenPerYear) |> drop_na() |> 
+  mutate(ratio = Blood/Sperm)
+mean(ratioBurden |> pull(ratio))
+
+p_ratioBurden <- ggplot(ratioBurden, aes("ratio", ratio)) + 
+  geom_jitter(width = 0.3, size=3.5, pch=21, col='white', stroke=0.25, fill = "black") +
+  geom_boxplot(outlier.shape = NA,  alpha = 0) +
+  
+  ylim(0,19) +
+  ylab("Substitution Ratio: Blood/Sperm") +
+  theme_pubr() +
+  theme(axis.title.x = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank())
+p_ratioBurden 
+
+ratioIndelBurden <- burdenSummary |> select(PD_ID, tissue, age_at_sampling, indelBurden) |> 
+  mutate(indiv = str_sub(PD_ID, 1,7)) |> mutate(indelBurdenPerYear = indelBurden/age_at_sampling) |> 
+  group_by(indiv, tissue) |> summarize(indelBurdenPerYear = mean(indelBurdenPerYear), .groups = "drop") |> 
+  pivot_wider(names_from= tissue, values_from = indelBurdenPerYear) |> drop_na() |> 
+  mutate(ratio = Blood/Sperm) |> 
+  filter(ratio != Inf)
+mean(ratioIndelBurden |> pull(ratio))
+
+p_ratioIndelBurden <- ggplot(ratioIndelBurden, aes("ratio", ratio)) + 
+    geom_jitter(width = 0.3, size=3.5, pch=21, col='white', stroke=0.25, fill = "black") +
+geom_boxplot(outlier.shape = NA, alpha = 0) +
+  ylim(0,19) +
+  ylab("Indel Ratio: Blood/Sperm") +
+  theme_pubr() +
+  theme(axis.title.x = element_blank(), axis.ticks.x = element_blank(), axis.text.x = element_blank())
+p_ratioIndelBurden
+
+```
+
+
+### Trinuc profiles
+```{r trinuc, fig.height=5, fig.width=10}
+
+
+# Create the necessary vectors
+sub_vec <- c("C>A", "C>G", "C>T", "T>A", "T>C", "T>G")
+ctx_vec <- paste(rep(c("A", "C", "G", "T"), each = 4), rep(c("A", "C", "G", "T"), times = 4), sep = "-")
+full_vec <- paste(rep(sub_vec, each = 16), rep(ctx_vec, times = 6), sep = ",")
+xstr <- paste(substr(full_vec, 5, 5), substr(full_vec, 1, 1), substr(full_vec, 7, 7), sep = "")
+ordered_names <- paste(xstr, ">", rep(c("A", "G", "T", "A", "C", "G"), each = 16), sep = "")
+
+# Define colors for each sub_vec
+colours <- c("deepskyblue", "black", "firebrick2", "gray", "darkolivegreen3", "rosybrown2")
+names(colours) <- sub_vec  # Assign names to colors for mapping
+
+# Create a combined data frame
+trinucCounts <- tibble(
+  TRI = ordered_names,
+  xstr = xstr,
+  sub_vec = rep(sub_vec, each = 16)) |> 
+  left_join(analysisREvars |> group_by(TRI, tissue) |> summarize(mutation_counts = n(), .groups =  "drop") |> 
+  drop_na())
+
+trinucSperm <- ggplot(trinucCounts |> filter(tissue == "Sperm"), aes(x = xstr, y = mutation_counts, fill = sub_vec)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.8) +
+  facet_wrap(~sub_vec, ncol = 6, scales = "free_x") +
+  scale_fill_manual(values = colours) +
+  scale_y_continuous(limits=c(0, NA), expand = c(0, 0)) +
+  labs(y = "Mutation counts", x = "Sperm trinucleotide mutations") +
+  theme_pubr() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.line.x = element_blank(),
+    legend.position = "none",
+    strip.text = element_blank(),
+    panel.spacing = unit(0, "lines"),
+    panel.grid = element_blank()
+  ) 
+
+trinucBlood <- ggplot(trinucCounts |> filter(tissue == "Blood"), aes(x = xstr, y = mutation_counts, fill = sub_vec)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.8) +
+  facet_wrap(~sub_vec, ncol = 6, scales = "free_x") +
+  scale_fill_manual(values = colours) +
+  scale_y_continuous(limits=c(0, NA), expand = c(0, 0)) +
+  labs(y = "Mutation counts", x = "Blood trinucleotide mutations") +
+  theme_pubr() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.line.x = element_blank(),
+    legend.position = "none",
+    strip.text = element_blank(),
+    panel.spacing = unit(0, "lines"),
+    panel.grid = element_blank()
+  )
+
+
+
+# Data frame for rectangles
+domainsPlotObject <- data.frame(
+  recStart = 1:6,
+  recEnd = 2:7,
+  base = 0,
+  height = rep(1, 6),
+  type = sub_vec)
+# Create rectangles using ggplot
+pDomains <- ggplot(domainsPlotObject, aes(xmin = recStart, xmax = recEnd, ymin = base, ymax = height)) +
+    geom_rect(aes(fill = type), colour = "white") +
+    geom_text(aes(x = (recStart + recEnd) / 2, y = height + 0.1, label = type), color = "black", vjust = 0) +  # Adjust y position
+    scale_fill_manual(values = colours) +
+    theme_void() + 
+    scale_x_continuous(expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0), limits = c(0, max(domainsPlotObject$height) + 0.2)) +  # Adjust y limits
+    guides(fill = "none") + coord_cartesian(clip = "off")
+plot_spacer()/pDomains/trinucSperm/trinucBlood + plot_layout(heights = c(0.1,1, 15, 15))
+# pDomains/trinuc + plot_layout(heights = c(1, 15))
+
+```
+
+### TwinsUK contribution
+```{r sigcontrib,fig.height=6, fig.width=6}
+sigOrderHDP <- c("SBS1", "SBS5", "SBS19")
+
+sigsHDP <- reSignatures |> 
+  select(-SBS17b) |> 
+  rename(tissue = Tissue) |> 
+  rowwise(Samples) |> mutate(totalVars = sum(c(SBS1,SBS5,SBS19))) |> ungroup() |> 
+  mutate(across(matches("SBS"), ~ .x/totalVars)) |> 
+  dplyr::rename(PD_ID = Samples) |> 
+  left_join(reSamplesTwinsUKmeta |> select(PD_ID, age_at_sampling), by = "PD_ID") 
+
+meanSigs <- sigsHDP |> group_by(tissue) |> summarize(SBS1 = mean(SBS1),SBS5 = mean(SBS5),SBS19 = mean(SBS19))
+
+pSigsHDP <- sigsHDP |>   
+  select(where(~ any(. != 0))) |> 
+  pivot_longer(cols = matches("SBS"), names_to = "sig", values_to = "sigCount") |> 
+  mutate(sig = fct_relevel(sig, rev(sigOrderHDP))) |>
+  arrange(age_at_sampling) |> 
+  mutate(PD_ID = fct_inorder(PD_ID)) |>
+  mutate(label = if_else(tissue == "Blood", "Blood (Age 22 to 83 years)", "Sperm (Age 24 to 75 years)")) |> 
+  mutate(label = fct_relevel(label, c("Sperm (Age 24 to 75 years)", "Blood (Age 22 to 83 years)"))) |>
+  ggplot(aes(x= PD_ID, y = sigCount, fill = sig)) +
+  geom_bar(stat = "identity") +
+  ylab("Signature contribution") +
+  facet_wrap(~label, scales = "free_x", strip.position = "bottom", ncol = 1) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,1)) +
+  theme_pubr() +
+  scale_fill_manual(values = c('#984ea3', '#80b1d3','#fdb462')) +
+  scale_x_discrete(labels=setNames(sigsHDP$age_at_sampling, sigsHDP$PD_ID)) +
+  theme(
+        legend.title = element_blank(),
+        legend.position = "right",
+        strip.background = element_blank(),
+        strip.text = element_text(size=12),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+         axis.line.x = element_blank(),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+pSigsHDP  
+
+```
+
+### Plot
+```{r Fig1,fig.height=12, fig.width=14}
+
+layout <- "
+ADE
+BDE
+CDE
+"
+
+(p_SpermTestisEff + labs(tag = "a") + p_SpermEffIndels + labs(tag = "b"))/
+  (bloodEffNano + labs(tag = "c") + bloodEff_ind + labs(tag = "d") + p_ratioBurden + labs(tag = "e") + p_ratioIndelBurden + labs(tag = "f") + plot_layout(widths = c(3,3,1,1)))/
+  ((pDomains  + labs(tag = "g") + trinucSperm + trinucBlood + plot_layout(axis_titles = "collect")) + free(pSigsHDP + labs(tag = "h"))+ plot_spacer() + 
+  plot_layout(design = layout, heights = c(1,15,15), widths = c(99,99,1))) + 
+  plot_layout(heights = c(3,2,2)) 
+
+png(paste0(outputPath, 'main/Fig1_BurdenSigs.png'), height=12, width=14, res = 300, units = "in")
+(p_SpermTestisEff + labs(tag = "a") + p_SpermEffIndels + labs(tag = "b"))/
+  (bloodEffNano + labs(tag = "c") + bloodEff_ind + labs(tag = "d") + p_ratioBurden + labs(tag = "e") + p_ratioIndelBurden + labs(tag = "f") + plot_layout(widths = c(3,3,1,1)))/
+  ((pDomains  + labs(tag = "g") + trinucSperm + trinucBlood + plot_layout(axis_titles = "collect")) + free(pSigsHDP + labs(tag = "h"))+ plot_spacer() + 
+  plot_layout(design = layout, heights = c(1,15,15), widths = c(99,99,1))) + 
+  plot_layout(heights = c(3,2,2))
+dev.off()
+
+pdf(paste0(outputPath, 'main/Fig1_BurdenSigs.pdf'), height=12, width=14, onefile = F)
+(p_SpermTestisEff + labs(tag = "a") + p_SpermEffIndels + labs(tag = "b"))/
+  (bloodEffNano + labs(tag = "c") + bloodEff_ind + labs(tag = "d") + p_ratioBurden + labs(tag = "e") + p_ratioIndelBurden + labs(tag = "f") + plot_layout(widths = c(3,3,1,1)))/
+  ((pDomains  + labs(tag = "g") + trinucSperm + trinucBlood + plot_layout(axis_titles = "collect")) + free(pSigsHDP + labs(tag = "h"))+ plot_spacer() + 
+  plot_layout(design = layout, heights = c(1,15,15), widths = c(99,99,1))) + 
+  plot_layout(heights = c(3,2,2))
+
+dev.off()
+```
+
+
+
+
+
+# Extended Figures
+## Ext Fig 1
+### Burdens
+```{r spermCounts}
+spermCats <- tibble(spermCategory = c("Azoospermia", "Oligozoospermia", "Normozoospermia"),
+                    xmins = c(0,0.01,15),
+                    xmaxs = c(0.0099,14.99,Inf)) |>
+  mutate(spermCategory = fct_relevel(spermCategory, c("Azoospermia", "Oligozoospermia", "Normozoospermia")))
+
+spermCatsOligo <- tibble(spermCategoryOligo = c("Azoospermia", "Severe Oligozoospermia", "Moderate Oligozoospermia", "Mild Oligozoospermia", "Normozoospermia"),
+                    xmins = c(0,0.01,5,10,15),
+                    xmaxs = c(0.0099, 4.99, 9.99, 14.99,Inf)) |>
+  mutate(spermCategoryOligo = fct_relevel(spermCategoryOligo, c("Azoospermia", "Severe Oligozoospermia", "Moderate Oligozoospermia", "Mild Oligozoospermia", "Normozoospermia")))
+
+# Set colour pallete 
+spermConc_colours <- c("Azoospermia" = "#b10026",
+                     "Severe Oligozoospermia" = "#fc4e2a",
+                    "Moderate Oligozoospermia" = "#fd8d3c",
+                    "Mild Oligozoospermia" = "#fed976",
+                    "Oligozoospermia" = "#fd8d3c",
+                    "Normozoospermia" = "#74a9cf",
+                    "Blood" = "grey")
+
+set.seed(17)
+pSpermCountsDist <- ggplot(spermCounts) + 
+  geom_rect(data = spermCats, aes(xmin = xmins, xmax = xmaxs, ymin = -Inf, ymax = Inf, fill = spermCategory), alpha = 0.2) + 
+  geom_jitter(data = spermCounts, aes(sperm_conc, source, fill = spermCategory), size=3, pch=21, col='white', stroke=0.25) +
+  scale_fill_manual(values = spermConc_colours) +
+  theme_minimal() +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank()) +
+  xlab("Sperm Concentration (million/mL)")
+
+pBurdenOverview <- 
+  spermCounts |> bind_rows(maskedCounts |> filter(tissue == "Blood") |> mutate(spermCategory = "Blood")) |> 
+  mutate(spermCategory = fct_relevel(spermCategory, c("Blood","Azoospermia", "Oligozoospermia", "Normozoospermia"))) |> 
+  drop_na(burden) |> 
+  mutate(burdenPerYear = burden/age_at_sampling) |> select(burdenPerYear, spermCategory, tissue) |> 
+  ggplot(aes(x = spermCategory,y = burdenPerYear)) + 
+  # geom_violin(fill = NA) +
+  geom_quasirandom(aes(fill = spermCategory), size=3, pch=21, col='white', stroke=0.25) +
+  # geom_jitter(aes(fill = spermCategory), size=3, pch=21, col='white', stroke=0.25) +
+  scale_fill_manual(values = spermConc_colours) +
+  scale_y_continuous(limits = c(0,NA)) +
+  xlab("Sperm Category") +
+  theme_pubr() +
+  facet_grid(~tissue, scales = "free_x", space = "free_x") +
+  theme(legend.position = "none",
+        axis.title.x = element_text(hjust = 0.67),
+        strip.background = element_blank(),
+        strip.text = element_blank()) 
+set.seed(61)
+pBurdenOverview
+
+```
+
+### Images
+``` {r ImageFig}
+
+
+p_normStain <- ggplot2::ggplot() + ggplot2::annotation_custom(grid::rasterGrob(normStain,
+                                                width=ggplot2::unit(1,"npc"),
+                                                height=ggplot2::unit(1,"npc")),
+                               -Inf, Inf, -Inf, Inf) + coord_fixed(ratio = 749/1166) +
+  xlab("Normozoospermic (214 M/ml)")
+p_oligoStain <- ggplot2::ggplot() + ggplot2::annotation_custom(grid::rasterGrob(oligoStain,
+                                                width=ggplot2::unit(1,"npc"),
+                                                height=ggplot2::unit(1,"npc")),
+                               -Inf, Inf, -Inf, Inf)+ coord_fixed(ratio = 749/1166) +
+  xlab("Oligozoospermic (0.35 M/ml)")
+p_azooStain <- ggplot2::ggplot() + ggplot2::annotation_custom(grid::rasterGrob(azooStain,
+                                                width=ggplot2::unit(1,"npc"),
+                                                height=ggplot2::unit(1,"npc")),
+                               -Inf, Inf, -Inf, Inf)+ coord_fixed(ratio = 749/1166)  +
+  xlab("Azoospermic (0 M/ml)")
+ 
+p_azooStain +  p_oligoStain + p_normStain 
+
+```
+
+### Plot
+```{r paperFig, fig.height = 7, fig.width= 7}
+mb <- unique(as.numeric(1:10 %o% 10 ^ (-1:3)))
+
+spermCats2 <- tibble(spermCategory = c("Azoospermia", "Oligozoospermia", "Normozoospermia"),
+                    xmins = c(0.05,0.2,15),
+                    xmaxs = c(0.199,14.99,500)) |>
+  mutate(spermCategory = fct_relevel(spermCategory, c("Azoospermia", "Oligozoospermia", "Normozoospermia")))
+set.seed(1)
+pSpermDistLog <- ggplot(spermCounts |> mutate(sperm_conc = if_else(sperm_conc == 0, 0.1,sperm_conc))) + 
+  geom_rect(data = spermCats2, aes(xmin = xmins, xmax = xmaxs, ymin = -Inf, ymax = Inf, fill = spermCategory), alpha = 0.2) + 
+
+  geom_jitter(aes(sperm_conc, source, fill = spermCategory), size=3, pch=21, col='white', stroke=0.25) +
+  scale_fill_manual(values = spermConc_colours) +
+  coord_cartesian(clip = "off") +
+  theme_pubr() +
+    scale_x_log10(breaks = c(0.1,1,10,100), labels = c("0", "1", "10", "100"), minor_breaks = mb, expand= c(0,0)) +
+  theme(legend.title=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.text.x=element_text(size = 12, colour = "black"),
+        axis.line.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        panel.grid.major.x = element_line(),
+        panel.grid.minor.x = element_line()) +
+  xlab("Sperm Concentration (million/mL)") 
+
+(p_azooStain +  p_oligoStain + p_normStain)/
+  free(pSpermDistLog) / 
+   free(pBurdenOverview)  + plot_layout(heights = c(1,1,1.5)) + plot_annotation(tag_levels = 'a') &
+    theme(plot.tag = element_text(face = 'bold'))
+
+png(paste0(outputPath, 'extended/FigExt1_SpermCount.png'), height=7, width=8, res = 300, units = "in")
+(p_azooStain +  p_oligoStain + p_normStain)/
+  free(pSpermDistLog) / 
+   free(pBurdenOverview)  + plot_layout(heights = c(1,1,1.5)) + plot_annotation(tag_levels = 'a') &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+pdf(paste0(outputPath, 'extended/FigExt1_SpermCount.pdf'), height=7, width=8, onefile = F)
+(p_azooStain +  p_oligoStain + p_normStain)/
+  free(pSpermDistLog) / 
+   free(pBurdenOverview)  + plot_layout(heights = c(1,1,1.5)) + plot_annotation(tag_levels = 'a') &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+
+```
+## Ext Fig 2
+```{r covWGSvsTarg, fig.height= 9, fig.width = 10}
+
+target_colours <- c("Sperm_targeted" = "#CC5800", "Targeted" = "#CC5800",
+                     "Sperm_exome" = "#FFAD66", "Exome" = "#FFAD66",
+                    "Sperm_genome" = "#52C4CC", "Genome" = "#52C4CC", "RE" = "#52C4CC", 
+                    "Blood_genome" = "#d73027")
+
+mb <- unique(as.numeric(1:10 %o% 10 ^ (-2:3)))
+covSummaryComp <- covSummary |> 
+  left_join(reSamplesTwinsUKmeta |> select(Sample_PD_ID, PD_ID, tissue, tissue_timepoint), by = "PD_ID") |> 
+  mutate(percentGenomeCov = bpUnique/3135000000 * 100) |> 
+  mutate(avgDuplexCov = bpTotal/bpUnique) |> 
+  mutate(tissue_timepoint = as.factor(tissue_timepoint)) |> 
+  drop_na() |> 
+  mutate(target = paste0(tissue, "_genome")) |> 
+  bind_rows(covSummaryTarg |> 
+                       mutate(target = paste0("Sperm_", nanoseq)) |> 
+              mutate(tissue = "Sperm") |> 
+  mutate(percentGenomeCov = percentGenomeCovPanel) |> 
+  mutate(avgDuplexCov = avgDuplexCovPanel)) |> 
+  mutate(target = if_else(str_detect(target, "Targeted"), "Sperm_targeted", target)) |> 
+  mutate(target = if_else(str_detect(target, "Exome"), "Sperm_exome", target))|> 
+  mutate(target = fct_relevel(target, names(target_colours)))
+
+avgCovSummaryComp <- covSummaryComp |> 
+  group_by(target, tissue) |> summarize(meanCov = round(mean(percentGenomeCov), 3), meanDepth = round(mean(avgDuplexCov), 2), meanBP = mean(bpUnique), samples = n(), .groups = "drop") |> 
+  mutate(percentGenomeCov = c(0.1, 4, 4.9, 50), avgDuplexCov = c(1050, 500, 17, 17)) |> 
+  mutate(label = paste0(target, "\n",
+                        "Samples: ", samples, "\n",
+                        "Mean dx: ", meanDepth, "\n",
+                        "Mean % genome: ", meanCov)) 
+  
+p_paper_uniqueCovComp <- ggplot(covSummaryComp, aes(x = percentGenomeCov, y = avgDuplexCov, fill = target)) +
+  geom_rect(data = avgCovSummaryComp, aes(NULL,NULL,xmax = meanCov, ymax = meanDepth, ymin = 0, xmin = 0, colour = target), fill = NA, linetype = "dashed") +
+  geom_point(alpha = 0.5, size = 2, shape = 21) +
+  geom_label(data = avgCovSummaryComp, aes(label = label), size = 4, alpha = 0.5) +
+  theme_pubr() +
+  scale_x_log10(breaks = c(0.01, 0.1, 1, 10, 100), minor_breaks = mb, limits = c(0.01, 100), labels = c(0.01, 0.1, 1, 10, 100)) +
+  scale_y_log10(breaks = c(1, 10, 100, 1000), minor_breaks = mb, limits = c(1, NA)) +
+  scale_color_manual(values = target_colours, name = "NanoSeq Type") +
+  scale_fill_manual(values = target_colours,  name = "NanoSeq Type") +
+  xlab("% Genome Unique Coverage") +
+  ylab("Sample mean duplex coverage (dx)") +
+  theme(legend.position = "None",
+        panel.grid.major = element_line(),
+        panel.grid.minor = element_line())
+p_paper_uniqueCovComp
+
+
+p_burdenCodingSummary <- ggplot(burdenCombinedCoding |> arrange(target) |> 
+                           filter(burdenType %in% c("burdenObserved", "burdenCorr", "burdenAll_NoPos")) |> 
+                          mutate(burdenType = str_remove(burdenType, "burden")) |> 
+                            mutate(burdenType = str_replace(burdenType, "Corr", "Corrected")) |> 
+                            mutate(burdenType = str_replace(burdenType, "All_NoPos", "Corrected + Exclude driver genes")) |> 
+                           mutate(nanoseq = fct_relevel(nanoseq, c("Targeted", "Exome", "Genome"))) |> 
+                           mutate(burdenType = fct_relevel(burdenType, c("Observed", "Corrected","Corrected + Exclude driver genes"))),
+                           aes(x = age_at_sampling, y = burden, fill = nanoseq, colour = nanoseq)) + 
+  geom_point(size=3.5, pch=21, col='white', stroke=0.25) + 
+  theme(text = element_text(size=16)) + 
+  geom_smooth(method='lm', alpha = 0.2) +
+  scale_fill_manual(values = target_colours,  name = "NanoSeq type") +
+  scale_colour_manual(values = target_colours,  name = "NanoSeq type") +
+  xlab('Age (years)') + 
+  ylab('Sperm substitutions per bp') + 
+  facet_wrap(~burdenType) +
+  theme_pubr() + 
+  ylim(0,NA) +
+  theme(legend.position = "none", strip.background = element_blank(), strip.text = element_text(size = 12))
+p_paper_uniqueCovComp/p_burdenCodingSummary + plot_layout(heights = c(2.5,1))+ plot_annotation(tag_levels = "a") &
+    theme(plot.tag = element_text(face = 'bold'))
+
+png(paste0(outputPath, 'extended/FigExt2_Coverage.png'), height=9, width=10, res = 300, units = "in")
+p_paper_uniqueCovComp/p_burdenCodingSummary + plot_layout(heights = c(2.5,1))+ plot_annotation(tag_levels = "a") &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+pdf(paste0(outputPath, 'extended/FigExt2_Coverage.pdf'), height=9, width=10, onefile = F)
+p_paper_uniqueCovComp/p_burdenCodingSummary + plot_layout(heights = c(2.5,1))+ plot_annotation(tag_levels = "a") &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+
+```
+
+## Ext Fig 3
+Also uses objects loaded in main Fig 1 code
+### Sig 1 vs 5
+```{r signatures1v5,fig.height=6, fig.width=14}
+sig1and5 <- sigsHDP |> 
+  left_join(burdenSummary |> select(burden, PD_ID, indiv_ID), by = "PD_ID") |> 
+  # Haploid for sperm, diploid for blood
+  mutate(mutsPerGenome = if_else(tissue == "Sperm", round(burden * 2582336232), round(burden * 2582336232 * 2))) |> 
+  mutate(across(c(SBS1, SBS5, SBS19),  ~ round(.x* mutsPerGenome)))
+
+sig1Vs5 <- function(df) {
+  # fit the linear mixed-effects models separately
+  fit1 <- lmer(SBS1 ~ age_at_sampling + (age_at_sampling - 1 | indiv_ID), data = df, REML = FALSE)
+  fit5 <- lmer(SBS5 ~ age_at_sampling + (age_at_sampling - 1 | indiv_ID), data = df, REML = FALSE)
+  
+  # Calculate confidence intervals with bootstrapping (bootpredictlme4) - for plotting purposes
+  ages <- seq(from = 14, to = 100, by = 7)
+  nsim <- 100
+  simulCI <- function(model) {
+    sapply(ages, function(x) predict(model, newdata = data.frame(age_at_sampling = x), re.form = NA, se.fit = TRUE, nsim = nsim)$ci.fit[, 1])
+  }
+  ci1 <- simulCI(fit1)
+  ci5 <- simulCI(fit5)
+  
+  CIs <- tibble(
+    age_at_sampling = ages,
+    ci1_lo = ci1[1,], ci1_hi = ci1[2,],
+    ci5_lo = ci5[1,], ci5_hi = ci5[2,]
+  )
+  
+  # Add labels
+  df$label1 <- paste("Sperm SBS1\n=", metricsLabel(fit1, 1))
+  df$label5 <- paste("Sperm SBS5\n=", metricsLabel(fit5, 1))
+  CIs$label1 <- df$label1[1]
+  CIs$label5 <- df$label5[1]
+
+  # Get min and max X and Y values for plot limits
+  max_age <- 87
+  max_dnm <- max(c(max(df$SBS1), max(df$SBS5))) + 200
+  
+  colors <- c("#fdb462", "#80b1d3")
+
+  p <- ggplot(df) +
+    # plot confidence bands
+    geom_ribbon(data = CIs, aes(x = age_at_sampling, ymin = ci1_lo, ymax = ci1_hi), fill = colors[1], alpha = 0.25, show.legend = FALSE) +
+    geom_ribbon(data = CIs, aes(x = age_at_sampling, ymin = ci5_lo, ymax = ci5_hi), fill = colors[2], alpha = 0.25, show.legend = FALSE) +
+    # plot the data points
+    geom_point(aes(x = age_at_sampling, y = SBS1, fill = label1), size = 3.5, pch = 21, color = 'white', stroke = 0.25) +
+    geom_point(aes(x = age_at_sampling, y = SBS5, fill = label5), size = 3.5, pch = 21, color = 'white', stroke = 0.25) +
+    # plot the predictions from the fitted model
+    geom_abline(intercept = fixef(fit1)[1], slope = fixef(fit1)[2], col = colors[1], lty = 2) +
+    geom_abline(intercept = fixef(fit5)[1], slope = fixef(fit5)[2], col = colors[2], lty = 2) +
+    scale_fill_manual(values = colors, breaks = c(df$label1[1], df$label5[1])) +
+    scale_color_manual(values = colors, breaks = c(df$label1[1], df$label5[1])) +
+    scale_x_continuous(expand = c(0, 0), limits = c(0, max_age)) +
+    scale_y_continuous(expand = c(0, 0), limits = c(0, max_dnm)) +
+    # aesthetics for the plot
+    xlab('Age (years)') + 
+    ylab('Substitutions per genome') +
+    theme_pubr() +
+    theme(legend.key.height = unit(1.5, "cm"), legend.title = element_blank(), legend.position = c(0.25, 0.75), legend.text = element_text(size = 12), legend.background = element_blank())
+  return(p)
+}
+
+sig1Vs5Vs19 <- function(df) {
+  # fit the linear mixed-effects models separately
+  fit1 <- lmer(SBS1 ~ age_at_sampling + (age_at_sampling - 1 | indiv_ID), data = df, REML = FALSE)
+  fit5 <- lmer(SBS5 ~ age_at_sampling + (age_at_sampling - 1 | indiv_ID), data = df, REML = FALSE)
+  fit19 <- lmer(SBS19 ~ age_at_sampling + (age_at_sampling - 1 | indiv_ID), data = df, REML = FALSE)
+  
+  # Calculate confidence intervals with bootstrapping (bootpredictlme4) - for plotting purposes
+  ages <- seq(from = 14, to = 100, by = 7)
+  nsim <- 100
+  simulCI <- function(model) {
+    sapply(ages, function(x) predict(model, newdata = data.frame(age_at_sampling = x), re.form = NA, se.fit = TRUE, nsim = nsim)$ci.fit[, 1])
+  }
+  ci1 <- simulCI(fit1)
+  ci5 <- simulCI(fit5)
+  ci19 <- simulCI(fit19)
+  
+  CIs <- tibble(
+    age_at_sampling = ages,
+    ci1_lo = ci1[1,], ci1_hi = ci1[2,],
+    ci5_lo = ci5[1,], ci5_hi = ci5[2,],
+    ci19_lo = ci19[1,], ci19_hi = ci19[2,]
+  )
+  
+  # Add labels
+  df$label1 <- paste("Blood SBS1\n=", metricsLabel(fit1, 1))
+  df$label5 <- paste("Blood SBS5\n=", metricsLabel(fit5, 1))
+  df$label19 <- paste("Blood SBS19\n=", metricsLabel(fit19, 1))
+  CIs$label1 <- df$label1[1]
+  CIs$label5 <- df$label5[1]
+  CIs$label19 <- df$label19[1]
+
+
+  # Get min and max X and Y values for plot limits
+  max_age <- 87
+  max_dnm <- max(c(max(df$SBS1), max(df$SBS5), max(df$SBS19))) + 200
+  
+  colors <- c("#fdb462", "#80b1d3", "#984ea3")
+
+  p <- ggplot(df) +
+    # plot confidence bands
+    geom_ribbon(data = CIs, aes(x = age_at_sampling, ymin = ci1_lo, ymax = ci1_hi), fill = colors[1], alpha = 0.25, show.legend = FALSE) +
+    geom_ribbon(data = CIs, aes(x = age_at_sampling, ymin = ci5_lo, ymax = ci5_hi), fill = colors[2], alpha = 0.25, show.legend = FALSE) +
+    geom_ribbon(data = CIs, aes(x = age_at_sampling, ymin = ci19_lo, ymax = ci19_hi), fill = colors[3], alpha = 0.25, show.legend = FALSE) +
+    # plot the data points
+    geom_point(aes(x = age_at_sampling, y = SBS1, fill = label1), size = 3.5, pch = 21, color = 'white', stroke = 0.25) +
+    geom_point(aes(x = age_at_sampling, y = SBS5, fill = label5), size = 3.5, pch = 21, color = 'white', stroke = 0.25) +
+    geom_point(aes(x = age_at_sampling, y = SBS19, fill = label19), size = 3.5, pch = 21, color = 'white', stroke = 0.25) +
+    # plot the predictions from the fitted model
+    geom_abline(intercept = fixef(fit1)[1], slope = fixef(fit1)[2], col = colors[1], lty = 2) +
+    geom_abline(intercept = fixef(fit5)[1], slope = fixef(fit5)[2], col = colors[2], lty = 2) +
+    geom_abline(intercept = fixef(fit19)[1], slope = fixef(fit19)[2], col = colors[3], lty = 2) +
+    scale_fill_manual(values = colors, breaks = c(df$label1[1], df$label5[1], df$label19[1])) +
+    scale_color_manual(values = colors, breaks = c(df$label1[1], df$label5[1], df$label19[1])) +
+    scale_x_continuous(expand = c(0, 0), limits = c(0, max_age)) +
+    scale_y_continuous(expand = c(0, 0), limits = c(0, max_dnm)) +
+    # aesthetics for the plot
+    xlab('Age (years)') + 
+    ylab('Substitutions per genome') +
+    theme_pubr() +
+    theme(legend.key.height = unit(1.5, "cm"), legend.title = element_blank(), legend.position = c(0.25, 0.75), legend.text = element_text(size = 12), legend.background = element_blank())
+  return(p)
+}
+
+pBlood1v5 <- sig1Vs5Vs19(sig1and5 |> filter(tissue == "Blood")) + ylab('Substitutions per diploid cell')
+
+pSperm1v5 <- sig1Vs5(sig1and5 |> filter(tissue == "Sperm")) + ylab('Substitutions per haploid cell')
+
+pSperm1v5 + pBlood1v5 
+
+```
+
+### Mut Ratios
+```{r ratio, fig.width=3, fig.height=5}
+
+ratioBurden_combined <- sig1and5 %>%
+  select(PD_ID, tissue, age_at_sampling, SBS1, SBS5) %>%
+  # Correct for ploidy
+  mutate(SBS1 = if_else(tissue == "Sperm", SBS1*2, SBS1), SBS5 = if_else(tissue == "Sperm", SBS5*2, SBS5)) |> 
+  pivot_longer(cols = c(SBS1, SBS5), names_to = "Signature", values_to = "burden") %>%
+  mutate(indiv = str_sub(PD_ID, 1, 7)) %>%
+  mutate(burdenPerYear = burden / age_at_sampling) %>%
+  group_by(indiv, tissue, Signature) %>%
+  summarize(burdenPerYear = mean(burdenPerYear), .groups = "drop") %>%
+  pivot_wider(names_from = tissue, values_from = burdenPerYear) %>%
+  drop_na() %>%
+  mutate(ratio = Blood / Sperm)
+meansSigRatios <- ratioBurden_combined |> group_by(Signature) |> summarize(meanRatio = mean(ratio))
+
+# Plot
+p_ratioBurdenSigs <- ggplot(ratioBurden_combined, aes(x = Signature, y = ratio, fill = Signature)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0) +
+  geom_jitter(width = 0.3, size = 3.5, pch = 21, col = 'white', stroke = 0.25) +
+  
+  scale_fill_manual(values = c("#fdb462", "#80b1d3")) +
+  ylim(0, NA) +
+  ylab("Substitution Ratio: Blood/Sperm") +
+  theme_pubr() +
+  theme(legend.position = "none")
+
+p_ratioBurdenSigs
+
+```
+
+###Plot
+```{r effPlots,fig.height=12, fig.width=14}
+
+(bloodEff_comp  + bloodEff_ind_comp) / (pSperm1v5 + pBlood1v5 + p_ratioBurdenSigs + plot_layout(widths = c(2,2,1))) + 
+  plot_layout(heights = c(1.5,1)) + plot_annotation(tag_levels = 'a') &
+    theme(plot.tag = element_text(face = 'bold'))
+
+png(paste0(outputPath, 'extended/FigExt3_BloodComp.png'), height=12, width=15, res = 300, units = "in")
+(bloodEff_comp  + bloodEff_ind_comp) / (pSperm1v5 + pBlood1v5 + p_ratioBurdenSigs + plot_layout(widths = c(2,2,1))) + 
+  plot_layout(heights = c(1.5,1)) + plot_annotation(tag_levels = 'a') &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+pdf(paste0(outputPath, 'extended/FigExt3_BloodComp.pdf'), height=12, width=15, onefile = F)
+(bloodEff_comp  + bloodEff_ind_comp) / (pSperm1v5 + pBlood1v5 + p_ratioBurdenSigs + plot_layout(widths = c(2,2,1))) + 
+  plot_layout(heights = c(1.5,1)) + plot_annotation(tag_levels = 'a') &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+```
+
+

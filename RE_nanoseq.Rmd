@@ -1,0 +1,986 @@
+---
+title: "nanoseqDataPrep"
+author: "Matt Neville"
+date: "17/01/2022"
+output: html_document
+---
+## Ext Fig 4
+#### Basic model
+```{r dndsGlobalComp}
+# No corrections
+load(paste0(dndsPath, "inputFor_dNdS/dndsCov.Rdata"))
+exomeVars_dNdS <- read_tsv(paste0(dndsPath, "inputFor_dNdS/mutationsInput/exomeVars_dNdS.tsv"), col_types = cols())
+
+dndsBasic <- dndscv(exomeVars_dNdS, max_muts_per_gene_per_sample = Inf, max_coding_muts_per_sample = Inf,
+                            outmats = T, gene_list = names(vCovEx))
+
+```
+
+#### Compare global
+```{r dndsGlobalComp}
+
+# Collect globaldnds values
+compGlobal_dNdS <- dndsBasic$globaldnds  |> mutate(test = "Basic") |> 
+  bind_rows(read_tsv(paste0(dndsPath, "inputFor_dNdS/results/globaldnds_TriExomeAll.tsv"), col_types = cols()) |> 
+            mutate(test = "BasePairCov")) |> 
+  bind_rows(read_tsv(paste0(dndsPath, "inputFor_dNdS/results/globaldnds_TriMethExomeAll.tsv"), col_types = cols()) |> 
+          mutate(test = "BasePairCov + CpGmeth")) |> 
+  bind_rows(read_tsv(paste0(dndsPath, "inputFor_dNdS/results/globaldnds_PentaMethExomeAll.tsv"), col_types = cols()) |> 
+              mutate(test = "BasePairCov + CpGmeth + Penta")) |> 
+  mutate(name = str_remove(name, "w"))
+p_compGlobal_dNdS <- compGlobal_dNdS |> 
+  filter(name != "tru") |> 
+  mutate(test = fct_inorder(test)) |> 
+  ggplot(aes(x = name, y = mle, colour = test)) +
+  geom_pointrange(aes(ymin = cilow, ymax = cihigh), position=position_dodge(width = 0.5)) +
+  geom_hline(yintercept = 1, linetype = "dashed") + 
+  scale_colour_discrete(name = "dNdScv model") +
+  ylab("Global dN/dS") + xlab("Mutation class") +
+  theme_pubr() +
+  theme(legend.position = c(0.3, 0.8), legend.text = element_text(size = 10), legend.title = element_text(size = 12), axis.title.x = element_blank())
+
+p_compGlobal_dNdS
+```
+
+#### Compare sig genes
+```{r dndsGlobalComp, fig.height = 7, fig.width=4}
+
+basic_ranked_genes <- read_tsv(paste0(dndsPath, "inputFor_dNdS/results/sel_cv_PentaMethCombAll.tsv"), col_types = cols()) |>
+  arrange(-qglobal_cv) |> 
+  pull(gene_name)
+
+# Read the datasets and combine them with NS for missing values
+# compGene_dNdSA <- read_tsv(paste0(dndsPath, "inputFor_dNdS/results/sel_cv_TriCombAll.tsv"), col_types = cols()) |> 
+#   mutate(test = "BasePairCov") |> 
+
+
+compGene_dNdSexome <- read_tsv(paste0(dndsPath, "inputFor_dNdS/results/sel_cv_TriCombAll.tsv"), col_types = cols()) |> 
+  mutate(test = "BasePairCov") |> 
+  bind_rows(read_tsv(paste0(dndsPath, "inputFor_dNdS/results/sel_cv_TriMethCombAll.tsv"), col_types = cols()) |> 
+              mutate(test = "BasePairCov +\nCpGmeth")) |> 
+  bind_rows(
+    read_tsv(paste0(dndsPath, "inputFor_dNdS/results/sel_cv_PentaMethCombAll.tsv"), col_types = cols()) |> 
+      mutate(test = "BasePairCov +\nCpGmeth +\nPenta")) |> 
+  filter(qglobal_cv < 0.1) |>
+  select(gene_name, test, qglobal_cv) |>
+  mutate( rank = 2)
+
+# Keep the bind_rows part unchanged and add ordering based on significance and gene rank
+compGene_dNdScomb <- compGene_dNdSexome |> 
+  bind_rows((read_tsv(paste0(dndsPath, "inputFor_dNdS/results/sel_cv_TriCombTarg.tsv"), col_types = cols()) |> 
+              mutate(test = "BasePairCov")) |> 
+  bind_rows(read_tsv(paste0(dndsPath, "inputFor_dNdS/results/sel_cv_TriMethCombTarg.tsv"), col_types = cols()) |> 
+              mutate(test = "BasePairCov +\nCpGmeth")) |> 
+  bind_rows(
+    read_tsv(paste0(dndsPath, "inputFor_dNdS/results/sel_cv_PentaMethCombTarg.tsv"), col_types = cols()) |> 
+      mutate(test = "BasePairCov +\nCpGmeth +\nPenta")) |> 
+  filter(qglobal_cv < 0.1) |> 
+  select(gene_name, test, qglobal_cv) |> 
+  mutate(rank = 1)) |> 
+  group_by(gene_name, test) |> 
+  summarize(rank = max(rank), .groups = "drop") |> 
+  mutate(Significant = if_else(rank == 2, "Exome-wide", "Restricted\nhypothesis")) |> 
+  select(-rank) |> 
+  complete(gene_name, test, fill = list(Significant = "NS")) |> 
+  mutate(Significant = factor(Significant, levels = c("Exome-wide", "Restricted\nhypothesis", "NS"))) |> # Set order for significance
+  mutate(gene_name = factor(gene_name, levels = basic_ranked_genes)) |> 
+  filter(gene_name != "SEMG1")
+
+p_compGene_dNdScomb <- ggplot(compGene_dNdScomb, aes(x = test, y = gene_name, fill = Significant)) +
+  geom_tile(color = "white") +
+  scale_fill_manual(values = c("Exome-wide" = "#74a9cf", "Restricted\nhypothesis" = "#fd8d3c", "NS" = "grey")) + # Customize colors
+  labs(x = "Test Type", y = "Gene", fill = "Significance") +
+  theme_pubr() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9), axis.text.y = element_text(size = 9), legend.position = "right",
+        legend.text = element_text(size = 8), legend.title = element_text(size = 12),axis.title.x = element_blank())
+
+
+p_compGene_dNdScomb
+
+
+```
+
+#### Penta context
+```{r dndsPentaContext}
+tri <- read_tsv(paste0(dndsPath, "inputFor_dNdS/results/mle_submodel_TriMethExomeAll.tsv"), col_types = cols()) |> 
+  filter(!name %in% c("wmis", "wspl", "wnon")) |> 
+  # Handle meth
+  mutate(meth = if_else(str_detect(name, "z_High"), "High", "Mid")) |> mutate(meth = if_else(str_detect(name, "z_Low"), "Low", meth)) |> 
+  mutate(name = if_else(str_detect(name, "z_High"), str_sub(name, 7,14), name)) |> mutate(name = if_else(str_detect(name, "z_Low"), str_sub(name, 6,13), name)) |> 
+  rename(tri = name, triRate = mle, tricilow = cilow, tricihigh = cihigh)
+
+penta <- read_tsv(paste0(dndsPath, "inputFor_dNdS/results/mle_submodel_PentaMethExomeAll.tsv"), col_types = cols()) |> 
+  # Remove no estimate
+  filter(!name %in% c("wmis", "wspl", "wnon")) |> 
+  # Handle meth
+  mutate(meth = if_else(str_detect(name, "z_High"), "High", "Mid")) |> mutate(meth = if_else(str_detect(name, "z_Low"), "Low", meth)) |> 
+  mutate(name = if_else(str_detect(name, "z_High"), str_sub(name, 7,18), name)) |> mutate(name = if_else(str_detect(name, "z_Low"), str_sub(name, 6,17), name)) |> 
+  rename(penta = name, pentaRate = mle, pentacilow = cilow, pentacihigh = cihigh) |> 
+  mutate(tri = paste0(str_sub(penta,2,4), ">", str_sub(penta,8,10)))
+
+# Function to calculate standard error from confidence interval
+calc_se <- function(ci_high, ci_low) {
+  (ci_high - ci_low) / (2 * 1.96)  # CI to SE conversion assuming 95% CI
+}
+
+# Calculate the difference in rates, their standard errors, z-scores, and FDR-corrected p-values
+pentaCompare <- penta |> left_join(tri, join_by(meth, tri)) |>
+  mutate(
+    # Calculate standard errors for pentanucleotide and trinucleotide contexts
+    penta_se = calc_se(pentacihigh, pentacilow),
+    tri_se = calc_se(tricihigh, tricilow),
+    
+    # Calculate the difference in mutation rates
+    rate_diff = pentaRate - triRate,
+    
+    # Combined standard error for the difference
+    diff_se = sqrt(penta_se^2 + tri_se^2),
+    
+    # Calculate z-score for the difference
+    z_score = rate_diff / diff_se,
+    
+    # p-value from z-score (two-tailed test)
+    p_value = 2 * pnorm(-abs(z_score)),
+    
+    # FDR-corrected p-value (Benjamini-Hochberg correction)
+    p_adj_fdr = p.adjust(p_value, method = "fdr")
+  )
+
+pentaSig = pentaCompare |> arrange(p_adj_fdr)
+write_tsv(pentaSig, paste0(paperPath, "extended/supTable_pentaMutRates.tsv"))
+
+sigTris <- pentaSig |> filter(p_adj_fdr < 0.05) |> 
+  group_by(tri, meth) |> summarize(count = n())
+```
+
+#### Methylation
+```{r dndsGlobalComp}
+# Create the tibble with mean methylation levels
+methLevel <- tibble(Consequence = c("synonymous", "missense", "nonsense", "splice"),
+                    Mean_meth = c(0.648, 0.696, 0.721, 0.770),
+                    Mean_duplex_cov = c(21008, 20900, 21108, 14340)) |> 
+  mutate(Consequence = factor(Consequence, levels = c("synonymous", "missense", "nonsense", "splice")),
+         Mean_meth = Mean_meth * 100)  # Convert to percentage
+# Define the colors for each mutation type
+mutType_colours <- c("synonymous" = "grey70",
+                     "missense" = "cadetblue",
+                     "nonsense" = "darkorchid4",
+                     "splice" = "darkorchid2")
+
+# Create the plot with percentage scale
+p_methLevel <- ggplot(methLevel, aes(x = Consequence, y = Mean_meth, fill = Consequence)) +
+  geom_col() +
+  scale_fill_manual(values = mutType_colours) + # Map colors to the bars
+  scale_y_continuous(labels = scales::percent_format(scale = 1), limits = c(0,100), expand = c(0,0)) + 
+  labs(y = "Mean methylation (%)") +  # Add label for y-axis
+  theme_pubr() +
+  theme(axis.title.x = element_blank(),  # Remove x-axis title
+        axis.text.x = element_blank(), legend.position = "none",axis.ticks.x = element_blank(),
+         axis.line.x = element_blank())   # Remove x-axis text
+p_methLevel
+# Create the plot with percentage scale
+p_covLevel <- ggplot(methLevel, aes(x = Consequence, y = Mean_duplex_cov, fill = Consequence)) +
+  geom_col() +
+  scale_fill_manual(values = mutType_colours) + # Map colors to the bars
+  scale_y_continuous(expand = c(0,0)) + 
+  labs(y = "Mean duplex coverage") +  # Add label for y-axis
+  theme_pubr() +
+  theme(axis.title.x = element_blank(),  # Remove x-axis title
+        axis.text.x = element_blank(), legend.position = "right",axis.ticks.x = element_blank(),
+         axis.line.x = element_blank())   # Remove x-axis text
+p_covLevel
+
+methContexts <- tri |> filter(meth == "High") |> pull(tri)
+methRates <- tri |> filter(tri %in% methContexts) |> 
+  mutate(`Tri CpG>T Mut` = paste0(str_sub(tri,1,1), "[", str_sub(tri,2,2), ">", str_sub(tri,6,6), "]", str_sub(tri,3,3))) |> 
+  mutate(methBin = str_replace(meth, "Low", "Low (0-10%)")) |> 
+  mutate(methBin = str_replace(methBin, "Mid", "Mid (10-40% or unknown)")) |> 
+  mutate(methBin = str_replace(methBin, "High", "High (40-100%)")) |> 
+  mutate(`Tri CpG>T Mut` = fct_reorder(`Tri CpG>T Mut`, triRate)) 
+  
+
+p_methMutRate <- methRates |> 
+  mutate(methBin = factor(methBin, levels = c("Low (0-10%)", "Mid (10-40% or unknown)", "High (40-100%)"))) |>
+  ggplot(aes(x = methBin, y = triRate, ymin = tricilow, ymax = tricihigh, colour = `Tri CpG>T Mut`)) +
+  geom_pointrange(position = position_dodge(0.5)) + 
+  ylab("CpG>T mutation rate") +
+  xlab("Methylation decile") +
+  ylim(0, NA) +
+  theme_pubr() + 
+  theme(legend.position = "right", axis.text.x = element_text(size = 9))
+
+p_methMutRate
+
+```
+
+##### Plot
+```{r dndsGlobalComp, fig.height = 11, fig.width=13}
+layout <- "
+AACCC
+BBCCC
+DDDEE
+DDDEE
+DDDEE"
+p_covLevel + p_methLevel + p_methMutRate +  p_compGlobal_dNdS + p_compGene_dNdScomb + plot_layout(design = layout) + plot_annotation(tag_levels = "a")&
+    theme(plot.tag = element_text(face = 'bold'))
+
+png(paste0(paperPath, 'extended/FigExt4_dndsModel.png'), height=11, width=13, res=300, units = "in")
+p_covLevel + p_methLevel + p_methMutRate +  p_compGlobal_dNdS + p_compGene_dNdScomb + plot_layout(design = layout) + plot_annotation(tag_levels = "a")
+dev.off()
+pdf(paste0(paperPath, 'extended/FigExt4_dndsModel.pdf'), height=11, width=13, onefile = F)
+p_covLevel + p_methLevel + p_methMutRate +  p_compGlobal_dNdS + p_compGene_dNdScomb + plot_layout(design = layout) + plot_annotation(tag_levels = "a")
+dev.off()
+```
+
+# 1. Prep
+## Paths/Libraries
+```{r parameters}
+
+library(readxl)
+library(lme4)
+library(bootpredictlme4)
+library(egg)
+library(patchwork)
+library(ggrepel)
+library(ggtext)
+library(ggpubr)
+library(tidyverse)
+
+```
+
+# 2. Post Nextflow processing
+Processing outputs of Nextflow implementation of https://github.com/cancerit/NanoSeq
+### Contam/Efficiency
+```{bash ContamSummaries}
+mkdir -p $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+rm contam.txt
+for sample in `cut -f3 ../reSamplesTwinsUK.txt`;
+  do echo $sample
+	#Shows contaminant level.
+	contamination=$(tail -n 1 ${NF}outNextflow/QC/$sample/verifyBAMid/$sample.verifyBAMid.txt)
+	intendedPCs=$(head -n 2 ${NF}outNextflow/QC/$sample/verifyBAMid/$sample.verifyBAMid.txt | tail -n 1)
+	contamPCs=$(head -n 3 ${NF}outNextflow/QC/$sample/verifyBAMid/$sample.verifyBAMid.txt | tail -n 1)
+	seqReads=$(head -n 2 ${NF}outNextflow/QC/$sample/effi/$sample.effi.tsv | tail -n 1 |  awk '{print $2}')
+	dupRate=$(head -n 6 ${NF}outNextflow/QC/$sample/effi/$sample.effi.tsv  | tail -n 1 |  awk '{print $2}')
+	f_eff=$(head -n 12 ${NF}outNextflow/QC/$sample/effi/$sample.effi.tsv  | tail -n 1 |  awk '{print $2}')
+	echo "${sample} ${contamination} ${intendedPCs} ${contamPCs} ${seqReads} ${dupRate} ${f_eff}" >> contam.txt
+done
+```
+
+### Burdens
+```{bash burdens}
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+rm burdens.tsv
+for sample in `cut -f2 ../reSamplesTwinsUK.txt`;
+  do echo $sample
+  sed '/muts/d' ${NF}outNextflow/NanoSeq/$sample/post/$sample.mut_burden.tsv | sed "s/$/\t$sample/" >> burdens.tsv
+done
+```
+
+### Variant Calls
+```{bash varCalls}
+#Merge together all calls
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+rm mergedCalls.vcf
+for sample in `cut -f2 ../reSamplesTwinsUK.txt`;
+ do echo $sample
+  gunzip -c ${NF}outNextflow/NanoSeq/$sample/$sample.vcf.gz | sed '/#/d' | sed "s/$/\t$sample/" >> mergedCalls.vcf
+done
+```
+
+### Coverage Summaries
+```{bash coverageSummaries}
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+mkdir -p covRegion
+mkdir -p covRegion/jobLogs
+mkdir -p covRegion/source
+mkdir -p covRegion/merge
+
+### Get Nanoseq Covered Region
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+rm covRegion/jobLogs/cov.*
+for sample in `cut -f2 ../reSamplesTwinsUK.txt`;
+	do echo $sample
+	bsub -q normal -e covRegion/jobLogs/cov.$sample.err -o covRegion/jobLogs/cov.$sample.out -R 'select[mem>=1000] rusage[mem=1000]' -M1000 "zcat $NF/outNextflow/NanoSeq/$sample/post/$sample.cov.bed.gz > covRegion/source/$sample.cov.bed;  bedtools merge covRegion/source/$sample.cov.bed > covRegion/merged/$sample.cov.bed"
+done
+```
+
+### TriNuc Background
+```{bash triNucBackground}
+#Merge together trinucs
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+rm trinuc.txt
+for sample in `cut -f2 ../reSamplesTwinsUK.txt`;
+ do echo $sample
+  cut -f1,2 ${NF}outNextflow/NanoSeq/$sample/post/$sample.trint_counts_and_ratio2genome.tsv | sed '/ratio/d' | sed "s/$/\t$sample/" >> trinuc.txt
+done
+```
+
+# 3. QC
+## a) Check burdens/Masked SNP counts
+```{r maskedCounts}
+#Read in QC metrics
+seqMetrics <- read_delim(paste0(path, "twinsUK/postNextflow/contam.txt"), delim = " ", col_names = c("ssID", "contamination", "seqReads", "dupRate", "f_eff"), col_types = 'cc------ddd') |> 
+  drop_na() |> 
+  mutate(contamination = as.numeric(str_remove(contamination, "FREEMIX\\(Alpha\\):"))) 
+
+# Read in variant calls, can ignore warnings related to  NAs introduced by coercion, this is putting NAs for VAFs where no VAF is available
+reAllVars0 <- read_tsv(paste0(path, "twinsUK/postNextflow/mergedCalls.vcf"), col_names = c("chr", "start", "ref", "alt", "FILTER","info", "PD_ID"), col_types = 'cd-cc-ccc') |> 
+    filter(str_detect(info, "nv")) |>
+    separate(info, sep = ";", into = c("TRI","TIMES_CALLED","TYPE","DUPLEX_VAF","BAM_VAF","BAM_VAF_BQ10",NA,NA,NA,NA,"DUPLEX_COV","BAM_MUT","BAM_COV","BAM_MUT_BQ10","BAM_COV_BQ10", NA, "QPOS", "DPLX_ASXS", NA,NA,"BULK_ASXS", NA), convert = T) |> 
+    mutate_at(vars(TRI:BULK_ASXS), ~str_remove(., ".*=")) |> 
+    mutate_at(vars(TRI:BULK_ASXS), ~str_remove(., ".*,")) |> 
+    mutate_at(vars(TIMES_CALLED, DUPLEX_VAF:BULK_ASXS), as.numeric) |> 
+    mutate(target = "RE") |> 
+    # Add v2 variants for indels
+    bind_rows(read_tsv(paste0(path, "twinsUK/postNextflow/mergedCalls.vcf"), col_names = c("chr", "start", "ref", "alt", "FILTER","info", "PD_ID"), col_types = 'cd-cc-ccc') |>
+      filter(!str_detect(info, "nv")) |>
+      separate(info, sep = ";", into = c("TYPE","TIMES_CALLED","DUPLEX_VAF","BAM_VAF","BAM_VAF_BQ10",NA,"DUPLEX_COV","BAM_MUT","BAM_COV","BAM_MUT_BQ10","BAM_COV_BQ10", NA), convert = T) |>
+      mutate_at(vars(TYPE:BAM_COV_BQ10), ~str_remove(., ".*=")) |>
+      mutate_at(vars(TIMES_CALLED:BAM_COV_BQ10), as.numeric) |>
+      filter(start != 188371296) |> # Filter very noisy site
+      mutate(target = "RE")) |> 
+  mutate(PD_ID = str_sub(PD_ID, 1,8)) |> 
+  filter(PD_ID %in% reSamplesTwinsUK$PD_ID) |> 
+  # Suppress warnings about creating NAs when converting to numeric values
+  suppressWarnings() 
+  
+reAllVars <- reAllVars0 |> 
+    # Excluding variants with bam vaf >= 0.3 as likely artefacts/SNPs
+  filter(BAM_VAF < 0.3) 
+
+#Calculate burdens from variant counts so that DNVs aren't double counted and variants with VAF > 0.3 aren't counted (DNV/MNVs merged post burden calc)
+adjBurdens <- reAllVars |> filter(FILTER == "PASS") |> filter(TYPE %in% c("snv", "dnv", "mnv")) |> 
+  group_by(PD_ID) |> dplyr::summarize(mutsMan = sum(TIMES_CALLED), mutsSingle = n()) |> 
+  # Add indel burdens
+  left_join(reAllVars |> filter(FILTER == "PASS") |> filter(TYPE %in% c("del", "ins")) |> 
+    group_by(PD_ID) |> dplyr::summarize(indels = sum(TIMES_CALLED), indelsSingle = n()), by = "PD_ID") |> 
+  mutate(indels = replace_na(indels, 0)) |>  mutate(indelsSingle = replace_na(indelsSingle, 0))
+
+#Compare and merge with burdens in pipeline
+burdens <- read_tsv(paste0(path, "twinsUK/postNextflow/burdens.tsv"), col_names = c("group", "muts",	"total",	"burden",	"burden_lci",	"burden_uci", "PD_ID"), col_types = 'cdddddc') |> 
+  filter(PD_ID %in% reSamplesTwinsUK$PD_ID) |> 
+  filter(group == "observed") |> 
+  left_join(adjBurdens, by = "PD_ID") |> 
+  mutate(burdenMan = mutsMan/total) |> 
+  mutate(burdenSingle = mutsSingle/total) |> 
+  mutate(indelBurden = indels/total) |> 
+  mutate(indelBurdenSingle = indelsSingle/total) |> 
+  select(PD_ID, muts, mutsMan, mutsSingle, indels, indelsSingle, total, burden, burdenMan, burdenSingle, indelBurden, indelBurdenSingle) |> 
+  drop_na()
+
+#Find counts of masked and passed variants
+maskedCounts <- reAllVars |> 
+  mutate(FILTER = if_else(FILTER == "PASS", FILTER, "MASKED")) |> 
+  mutate(TYPE = if_else(TYPE %in% c("snv", "dnv", "mnv"), "snv", "indel")) |> 
+  group_by(PD_ID, FILTER, TYPE) |> summarize(count = n(), .groups = "drop") |> 
+  pivot_wider(id_cols = PD_ID, names_from = c(FILTER,TYPE), names_sep = "_", values_from = count, values_fill = 0) |> 
+  left_join(reSamplesTwinsUK, by = "PD_ID") |> 
+  left_join(burdens, by = "PD_ID") |> 
+  left_join(seqMetrics, by = "ssID") |> 
+  mutate(maskedProportion = MASKED_snv/PASS_snv) |> 
+  mutate(maskedProportionIndel = MASKED_indel/PASS_indel) |> 
+  mutate(above5 = if_else(maskedProportion > 5, T,F)) |> 
+  mutate(contam1 = if_else(contamination > 0.002,T,F)) |> 
+  mutate(contamConcern = if_else(PD_ID %in% c(), T, F)) |> #SampleIDs hidden for public code
+  mutate(label = if_else(tissue == "Sperm" & (maskedProportion > 5 | contamination > 0.002 | burden > 1e-7), str_sub(PD_ID, 6,8), "")) |> 
+  mutate(label = if_else(tissue == "Blood" & (maskedProportion > 5 | contamination > 0.002 | burden > 4e-7), str_sub(PD_ID, 6,8), label)) 
+
+# Initial stats
+preStats <- reAllVars |> left_join(reSamplesTwinsUK, by = join_by(PD_ID)) |> 
+  filter(FILTER == "PASS") |> 
+  group_by(PD_ID, tissue) |> summarize(count = sum(TIMES_CALLED), .groups = "drop") |> 
+  left_join(burdens |> select(PD_ID, total), by = join_by(PD_ID)) |> 
+  group_by(tissue) |> summarize(count = sum(count), indivs = n(), total = median(total), .groups = "drop") 
+preStats
+  
+```
+
+
+## b) Sperm Counting
+### Calculate concentrations
+```{r spermConc, fig.height=5, fig.width=12}
+
+# Calculate concentration in M/ml (million per ml)
+spermCounts <- read_xlsx("spermCounting.xlsx") |> 
+  drop_na() |>
+  mutate(sperm_conc = (SpermCount/SpermRows) * 1/20 * Dilution) |> 
+  mutate(round_conc = (RoundCellCount/RoundCellRows) * 1/20 * Dilution) |> 
+  select(PD_ID, sperm_conc, round_conc) |> 
+  mutate(germSomaRatio = sperm_conc/round_conc) |> 
+  mutate(spermCategory = if_else(sperm_conc >= 15, "Normozoospermia", "Oligozoospermia")) |> 
+  mutate(spermCategory = if_else(sperm_conc == 0, "Azoospermia", spermCategory)) |> 
+  mutate(spermCategoryOligo = if_else(sperm_conc > 0 & sperm_conc < 5, "Severe Oligozoospermia", spermCategory)) |> 
+  mutate(spermCategoryOligo = if_else(sperm_conc >= 5 & sperm_conc < 10, "Moderate Oligozoospermia", spermCategoryOligo)) |> 
+  mutate(spermCategoryOligo = if_else(sperm_conc >= 10 & sperm_conc < 15, "Mild Oligozoospermia", spermCategoryOligo)) |> 
+  mutate(somaCategory = if_else(round_conc >= 3, "High", "Low")) |> 
+  mutate(somaRatio = if_else(germSomaRatio >= 10, "Above10to1", "Below10to1"))|> 
+  filter(PD_ID %in% reSamplesTwinsUK$PD_ID) |> 
+  left_join(reSamplesTwinsUK |> select(PD_ID, age_at_sampling), by = "PD_ID") |> 
+  # drop_na(age_at_sampling) |>
+  mutate(spermCategory = fct_relevel(spermCategory, c("Azoospermia", "Oligozoospermia", "Normozoospermia"))) |> 
+  #DNA Yields
+  left_join(read_xls(pste0(metaPath, "spermTwinsTargetedExtractionQC.xls")), by = c("PD_ID")) |> 
+  left_join(maskedCounts, by = c("PD_ID", "age_at_sampling")) |> 
+  mutate(label = if_else(tissue == "Sperm" & (maskedProportion > 5 | contamination > 0.002 | burden > 1e-7 | sperm_conc < 5), str_sub(PD_ID, 6,8), "")) |> 
+  mutate(source = "TwinsUK") |> 
+  mutate(indiv_PD_ID = str_sub(PD_ID, 1, 7)) 
+write_tsv(spermCounts, paste0(localPath, "data/spermCounts.tsv"))
+```
+
+
+## c) Variant QC
+### Samples Passed QC
+```{r passQC}
+reSamplesPassingContam <- maskedCounts |> left_join(spermCounts |> select(sperm_conc, PD_ID), by = join_by(PD_ID)) |> 
+  # Filter 5 sperm samples that are azoo and 1 oligo less than 1 M/ml
+  filter(is.na(sperm_conc) | sperm_conc > 1) |> 
+  # Filter contaminated samples: 1 blood sample which is highly contaminated (alpha = 0.26), 3 blood with low level contam (alpha > 0.005) and 3 sperm with low level contam (alpha > 0.002). 4/5 azoospermic samples would have also failed this filter if they had passed sperm count filter
+  filter(!contamConcern) |> 
+  pull(PD_ID) 
+
+reSamplesTwinsUKFiltered <- reSamplesTwinsUK |> 
+  filter(PD_ID %in% reSamplesPassingContam) |> 
+  select(-c(sex, source, Family_member, ssID)) |> 
+  mutate(indiv_ID = str_sub(PD_ID, 1, 7))
+
+#Write out filtered metadata locally
+write_tsv(reSamplesTwinsUKFiltered, paste0(metaPath,"reSamplesTwinsUKFiltered.tsv"))
+
+#Write out filtered sample list on farm
+write_tsv(reSamplesTwinsUKFiltered |> select(Sample_PD_ID, PD_ID, tissue), paste0(path,"twinsUK/reFilteredTwinsUK.txt"), col_names = F)
+```
+
+#### Bam distribution
+```{r bamDist}
+# Visualize change in masked vs passed counts before and after filtering indivs
+vaf_colours <- c("MASKED" = "#fb8072",
+                 "cohortMask" = "#fdb462",
+                 "indelMASK" = "cadetblue",
+                 "manualAnnot" = "grey60",
+                 "alleleFreqThreshold" = "darkorchid3",
+                 "dbsnp" = "#addd8e",
+                 "shearwater" = "lightpink",
+                 "NEI_IND" = "#91003f",
+                 "PASS" = "#80b1d3")
+
+
+pPreFilter <- reAllVars |> left_join(reSamplesTwinsUK |> select(PD_ID, tissue), by = join_by(PD_ID)) |> 
+  mutate(TYPE = if_else(TYPE %in% c("snv", "dnv", "mnv"), "snv", "indel")) |> 
+  mutate(FILTER = if_else(FILTER %in% c("shearwater;dbsnp","dbsnp;shearwater"), "dbsnp", FILTER)) |>
+  mutate(FILTER = factor(FILTER, levels = names(vaf_colours), ordered = TRUE)) |> 
+  mutate(BAM_VAF = if_else(BAM_VAF == 0, BAM_VAF_BQ10, BAM_VAF)) |> 
+  ggplot(aes(BAM_VAF, after_stat(count), fill = FILTER)) +
+  scale_fill_manual(values = vaf_colours) +
+  scale_x_log10() +
+  geom_density(position = "stack") +
+  ylab("Density Pre") +
+  guides(fill=guide_legend(title="Filters all samples")) + 
+  facet_wrap(~tissue, scales = "free_y") + 
+  theme_pubr() +
+  theme(strip.background = element_blank(), legend.position = "right")
+pPostFilter <- reAllVars |> filter(PD_ID %in% reSamplesTwinsUKFiltered$PD_ID) |> left_join(reSamplesTwinsUK |> select(PD_ID, tissue), by = join_by(PD_ID)) |> 
+  mutate(TYPE = if_else(TYPE %in% c("snv", "dnv", "mnv"), "snv", "indel")) |> 
+  mutate(FILTER = if_else(FILTER %in% c("shearwater;dbsnp","dbsnp;shearwater"), "dbsnp", FILTER)) |>
+  mutate(FILTER = factor(FILTER, levels = names(vaf_colours), ordered = TRUE)) |> 
+  mutate(BAM_VAF = if_else(BAM_VAF == 0, BAM_VAF_BQ10, BAM_VAF)) |> 
+  ggplot(aes(BAM_VAF, after_stat(count), fill = FILTER)) +
+  scale_fill_manual(values = vaf_colours) +
+  scale_x_log10() +
+  geom_density(position = "stack") +
+  ylab("Density") +
+  guides(fill=guide_legend(title="Filters post sample exclusion")) + 
+  facet_wrap(~tissue, scales = "free_y") + 
+  theme_pubr() +
+  theme(strip.background = element_blank(), legend.position = "right")
+pPreFilter/pPostFilter + plot_layout(guides = "collect")
+
+png(paste0(localPath, 'pBamDist.png'), height=5, width=9, res = 300, units = "in")
+pPreFilter/pPostFilter + plot_layout(guides = "collect")
+dev.off()
+```
+
+#### Coverage stats
+```{bash excludeCov}
+### Number of unique bases and total bases, mean and median
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow/covRegion
+mkdir -p covStats
+rm jobLogs/covStats*
+for sample in `cut -f2 ../../reFilteredTwinsUK.txt`;
+	do echo $sample
+	bsub -q normal -e jobLogs/covStats.$sample.err -o jobLogs/covStats.$sample.out -R 'select[mem>=100] rusage[mem=100]' -M100 "cut -f 3 -d ';' source/$sample.cov.bed | datamash -s count 1 sum 1 mean 1 > covStats/$sample.covStats.txt"
+done
+
+#Group results for all
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow/covRegion
+rm covStats.txt
+for sample in `cut -f2 ../../reFilteredTwinsUK.txt`;
+  do echo $sample
+  cat covStats/$sample.covStats.txt | sed "s/$/\t$sample/" >> covStats.txt
+done
+```
+
+### Manual indel filtering
+Indel bug where they are being called even at masked sites. Manually exclude these vars
+#### Indel position bed
+```{r collapse}
+# Write out list of sites to get coverage for in each sample
+for(sample in (reSamplesTwinsUKFiltered |> pull(PD_ID))) {
+  indelsToCheck <- reAllVars |> 
+    filter(TYPE != "snv") |> 
+    filter(PD_ID == sample) |>
+    mutate(startBed = start - 1) |> 
+    mutate(endBed = start + str_length(ref) - 1) |> 
+    select(chr, startBed, endBed) |> 
+    arrange(chr, startBed)
+  write_tsv(indelsToCheck, paste0(path, "twinsUK/postNextflow/covRegion/indelFilter/", sample, ".vars.bed"), col_names = F)
+}
+
+```
+
+#### Cov bed intersect
+```{bash collapse}
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow/covRegion/indelFilter/
+
+rm ../jobLogs/intersect*
+for sample in `cut -f2 ../../../reFilteredTwinsUK.txt`;
+  do echo $sample
+  bsub -o ../jobLogs/intersect.$sample.out -e ../jobLogs/intersect.$sample.err -q normal -R 'select[mem>=100] rusage[mem=100] span[hosts=1]' -M 100 "module load bedtools; sort -T tmp -k1,1 -k2,2n $sample.vars.bed > $sample.vars.sorted.bed; bedtools intersect -a ../source/$sample.cov.bed -b $sample.vars.sorted.bed -wa > $sample.cov.bed"
+done
+
+# Group results
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow/covRegion/indelFilter/
+rm allIndelCov.bed
+for sample in `cut -f2 ../../../reFilteredTwinsUK.txt`;
+do echo $sample
+  sed "s/$/\t$sample/" $sample.cov.bed >> allIndelCov.bed
+done
+```
+
+#### Process Indel Cov
+```{r collapse}
+# Process cov
+indelsExpanded <- reAllVars |> 
+  filter(TYPE != "snv") |> 
+  mutate(length = str_length(ref)) |> 
+  rowwise() |> 
+  do({
+    copy_count <- seq_len(.$length)
+    data.frame(
+      chr = rep(.$chr, .$length),
+      start = rep(.$start, .$length),
+      length = rep(.$length, .$length),
+      PD_ID = rep(.$PD_ID, .$length), 
+      pos = .$start + copy_count - 1
+    )
+  }) |> 
+  ungroup() |> distinct() |> 
+  # Add coverage
+  left_join(read_tsv(paste0(path, "twinsUK/postNextflow/covRegion/indelFilter/allIndelCov.bed"), col_types = 'c-dcc', col_names = c("chr", "pos", "DUPLEX_COV", "PD_ID")) |> distinct() |> 
+  mutate(DUPLEX_COV = as.numeric(str_sub(DUPLEX_COV, 7, -1))), by = join_by(PD_ID, pos, chr)) |> 
+  mutate(DUPLEX_COV = replace_na(DUPLEX_COV, 0))
+
+# Update indel filtering with any cohort SNPs overlapping indel sites
+indelsFilter <- indelsExpanded |> 
+  mutate(noCov = if_else(DUPLEX_COV == 0, 1, 0)) |>
+  group_by(chr,start, PD_ID) |> summarize(noCov = sum(noCov), .groups = "drop") |> 
+  mutate(indelFilter = if_else(noCov > 0, "manualMASK", "PASS")) 
+table(indelsFilter$indelFilter)
+table(indelsFilter$noCov)
+
+```
+
+### Filtered vars
+```{r filterVars}
+reAllVarsFiltered0 <- reAllVars0 |> filter(PD_ID %in% reSamplesTwinsUKFiltered$PD_ID) |> 
+  # Excluding variants with bam vaf >= 0.3 as likely artefacts/SNPs
+  mutate(FILTER = if_else(BAM_VAF >= 0.3, "alleleFreqThreshold", FILTER, missing = FILTER)) |> 
+  # Indels at sites that were excluded from snv calling
+  left_join(indelsFilter |> select(-noCov), by = join_by(chr, start, PD_ID)) |>
+  mutate(indelFilter = replace_na(indelFilter, "PASS")) |>
+  mutate(FILTER = if_else(indelFilter != "PASS" & TYPE != "snv", "indelMASK", FILTER)) |> 
+  select(-c(indelFilter)) |> 
+  # Manually filter recurrent artefact
+  mutate(FILTER = if_else(start == 17254056 & chr == "19", "manualAnnot", FILTER)) |>
+  mutate(FILTER = if_else(start == 145718236 & chr == "7", "manualAnnot", FILTER)) |>
+  mutate(FILTER = if_else(start == 128255388 & chr == "11", "manualAnnot", FILTER)) |>
+  mutate(FILTER = if_else(start == 46507113 & chr == "19", "manualAnnot", FILTER)) |>
+  mutate(FILTER = if_else(start == 60955925 & chr == "16", "manualAnnot", FILTER))
+
+table(reAllVarsFiltered0$FILTER)
+reAllVarsFiltered <- reAllVarsFiltered0 |> 
+  filter(FILTER == "PASS")
+
+write_tsv(reAllVarsFiltered, paste0(path,"twinsUK/output/variantsFiltered0.tsv"))
+
+# VCF version for sigs analysis
+reAllVarsFilteredVCF <- reAllVarsFiltered |> mutate(blank = ".") |> 
+  mutate(id = paste(chr,start,ref,alt,PD_ID, sep = "_")) |> 
+   select(chr, start, id, ref, alt, blank2 = blank, FILTER, blank4 = blank) |> 
+  arrange(chr, as.numeric(start)) 
+
+write_tsv(reAllVarsFilteredVCF, paste0(path,"twinsUK/output/variantsFiltered0.vcf"))
+
+```
+
+### Corrected burdens
+Using shorted version of code from NanoSeq pipeline to correct burdens for trinucleotide composition (https://github.com/cancerit/NanoSeq/blob/develop/R/nanoseq_results_plotter.R)
+```{r burdensCorrected}
+#Write out filtered and corrected burdens
+burdensPost <- burdens |> filter(PD_ID %in% reSamplesTwinsUKFiltered$PD_ID) |> 
+  left_join(reAllVarsFiltered |> 
+              filter(TYPE %in% c("snv")) |> 
+              group_by(PD_ID) |> summarize(mutsPost = sum(TIMES_CALLED), adjMutsPostSingle = n()) , by = "PD_ID") |> 
+  mutate(burdenPost = mutsPost/total) |> 
+  left_join(reAllVarsFiltered |> 
+              filter(TYPE %in% c("del", "ins")) |> 
+              group_by(PD_ID) |> summarize(indelsPost = sum(TIMES_CALLED), adjIndelPostSingle = n()) , by = "PD_ID") |> 
+  mutate(indelsPost = replace_na(indelsPost, 0)) |> mutate(adjIndelPostSingle = replace_na(adjIndelPostSingle, 0)) |> 
+  mutate(burdenIndelPost = indelsPost/total) |> 
+  mutate(adjIndelBurdenPostSingle = adjIndelPostSingle/total) 
+
+burdensCorrected0 <- burdensPost |> 
+  select(PD_ID, total, muts = mutsPost,  burden = burdenPost, indels = indelsPost, indelBurden = burdenIndelPost)
+
+# Background full genome trinuc composition
+genome_counts <- tibble(trinuc = c("ACA", "ACC", "ACG", "ACT", "ATA", "ATC", "ATG", "ATT", "CCA", "CCC", "CCG", "CCT", "CTA", "CTC", "CTG", "CTT", "GCA", "GCC", "GCG", "GCT", "GTA", "GTC", "GTG", "GTT", "TCA", "TCC", "TCG", "TCT", "TTA", "TTC", "TTG", "TTT"),
+                genomeCount = c(115415924, 66550070, 14381094, 92058521, 117976329, 76401029, 105094288, 142651503, 105547494, 75238490,
+    15801067, 101628641, 73791042, 96335416, 115950255, 114180747, 82414099, 68090507, 13621251, 80004082,
+    64915540, 54055728, 86012414, 83421918, 112085858, 88336615, 12630597, 126566213, 119020255, 112827451,
+    108406418, 219915599), totalCount = 2861326455) |> 
+  mutate(genomeFraction = genomeCount/totalCount)
+
+# Trinucleotides covered per sample and ratio to full genome
+tri_bg <- read_tsv(paste0(path, "twinsUK/postNextflow/trinuc.txt"), col_types = cols(), col_names = c("trinuc", "trinucCount", "PD_ID")) |> 
+  left_join(genome_counts, by = join_by(trinuc)) |> left_join(burdensCorrected0 |> select(PD_ID, total), by = join_by(PD_ID)) |> 
+  mutate(sampleFraction = trinucCount/total) |> 
+  mutate(ratioToGenome = sampleFraction/genomeFraction) |> 
+  select(PD_ID, trinuc, ratioToGenome)
+
+# Observed Trinuc mutations adjusted by ratio of background to genome
+burdensCorr <- reAllVarsFiltered |> drop_na(TRI) |> filter(TRI != "NA") |>  
+  group_by(TRI, PD_ID) |> summarize(count = sum(TIMES_CALLED), .groups = "drop") |> 
+  mutate(trinuc = str_sub(TRI, 1, 3)) |> 
+  left_join(tri_bg, by = join_by(PD_ID, trinuc))|> 
+  mutate(trint_onto_genome = count/ratioToGenome) |> 
+  group_by(PD_ID) |> summarize(mutsCorr = sum(trint_onto_genome)) 
+  
+burdensCorrected <- burdensCorrected0 |> left_join(burdensCorr, by = join_by(PD_ID)) |> 
+  mutate(burdenCorr = mutsCorr/total)
+
+write_tsv(burdensCorrected, paste0(path, "twinsUK/output/burdensFiltered.tsv"))
+
+```
+
+# 4. Analysis Files
+## Burden Correction
+### Get testis cov20 files
+```{bash cov20}
+cd $MN7/sperm/re_nanoseq/twinsUK/burdenCorrection
+mkdir -p testisSamples
+# Get testis samples with mean cov > 15
+# Samples in main testis folder
+grep "testis" ../panBodyMuts.tsv | awk -F'\t' 'NR == 1 || $9 > 15' | cut -f1 | tail -n +2 | grep -v "PD43851y" | grep -v "PD28690" | grep -v "PD46269c" > testisIDlist.txt
+# Samples in panbody project folder
+grep "testis" ../panBodyMuts.tsv | awk -F'\t' 'NR == 1 || $9 > 15' | cut -f1 | tail -n +2 | grep -e "PD43851y" -e "PD28690" > panBodyIDlist.txt
+
+rm testisSamples/*
+for sample in `cat testisIDlist.txt`;
+  do echo $sample
+  ln -s /nfs/cancer_ref01/nst_links/live/1951/$sample/$sample.caveman_c.no.analysis.bed.* testisSamples/
+  ln -s /nfs/cancer_ref01/nst_links/live/1951/$sample/$sample.sample.dupmarked.bam* testisSamples/
+done
+
+for sample in `cat panBodyIDlist.txt`;
+  do echo $sample
+  ln -s /nfs/cancer_ref01/nst_links/live/1696/$sample/$sample.caveman_c.no.analysis.bed.* testisSamples/
+  ln -s /nfs/cancer_ref01/nst_links/live/1696/$sample/$sample.sample.dupmarked.bam* testisSamples/
+done
+
+```
+
+### Run cov20
+```{bash runCov20}
+cd $MN7/sperm/re_nanoseq/twinsUK/burdenCorrection/testisSamples/
+mkdir -p jobLogs
+cp ../fa8sanger-NanoSeq_Paper_Code-f506033/CORRECTION_BURDEN_STD_SEQUENCING/* .
+gunzip human_genome.bed.gz
+
+cd $MN7/sperm/re_nanoseq/twinsUK/burdenCorrection/testisSamples/
+rm jobLogs/cov.*
+for sample in `cat ../testisIDlist.txt ../panBodyIDlist.txt`;
+  do echo $sample
+  bsub -o jobLogs/cov.$sample.out -e jobLogs/cov.$sample.err -q normal -R 'select[mem>=4000] rusage[mem=4000] span[hosts=1]' -M 4000 "module load bedtools; ./min_cov_genome.pl $sample.sample.dupmarked.bam 20"
+done
+```
+
+### Get per tissue coverage
+```{bash coverageTissues}
+
+# Merge per sample tissue
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+rm covRegion/spermAll.bed
+for sample in `grep "Sperm" ../reSamplesTwinsUK.txt | cut -f2`;
+  do echo $sample
+  cat covRegion/source/$sample.cov.bed >> covRegion/spermAll.bed
+done
+
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+rm covRegion/bloodAll.bed
+for sample in `grep "Blood" ../reSamplesTwinsUK.txt | cut -f2`;
+  do echo $sample
+  cat covRegion/source/$sample.cov.bed >> covRegion/bloodAll.bed
+done
+
+# Sort and merge
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+rm covRegion/jobLogs/sperm*
+bsub -q long -e covRegion/jobLogs/sperm.err -o covRegion/jobLogs/sperm.out -R 'select[mem>=100000] rusage[mem=100000]' -M100000 "module load bedtools; sort -k1,1 -k2,2n covRegion/spermAll.bed > covRegion/spermAll.sorted.bed ; bedtools merge -i covRegion/spermAll.sorted.bed > spermFullCov.bed"
+# Sort and merge
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow
+rm covRegion/jobLogs/blood*
+bsub -q long -e covRegion/jobLogs/blood.err -o covRegion/jobLogs/blood.out -R 'select[mem>=100000] rusage[mem=100000]' -M100000 "module load bedtools; sort -k1,1 -k2,2n covRegion/bloodAll.bed > covRegion/bloodAll.sorted.bed ; bedtools merge -i covRegion/bloodAll.sorted.bed > bloodFullCov.bed"
+
+```
+
+### Run correction
+```{bash runCov20}
+# Get mut files
+cd $MN7/sperm/re_nanoseq/twinsUK/burdenCorrection/testisSamples/
+for sample in `cat ../testisIDlist.txt ../panBodyIDlist.txt`;
+  do echo $sample
+  cp /lustre/scratch125/casm/team294rr/rs30/Immunoediting-Cortez/PanBody_vcf_files/SNVs/${sample}_complete_final_retained_4.goodSNPS_appended.vcf.gz ${sample}.filteredMuts.vcf.gz
+done
+
+# Use sperm full cov as region 
+cp $MN7/sperm/re_nanoseq/twinsUK/postNextflow/spermFullCov.bed $MN7/sperm/re_nanoseq/twinsUK/burdenCorrection/testisSamples/nanoseq_genome.bed 
+
+#Run fede script
+cd $MN7/sperm/re_nanoseq/twinsUK/burdenCorrection/testisSamples/
+rm jobLogs/cor.*
+for sample in `cat ../testisIDlist.txt ../panBodyIDlist.txt`;
+  do echo $sample
+  bsub -o jobLogs/cor.$sample.out -e jobLogs/cor.$sample.err -q normal -R 'select[mem>=12000] rusage[mem=12000] span[hosts=1]' -M 12000 "Rscript calculate_rates_in_nanoseq_genome.R $sample"
+done
+
+#Group results
+cd $MN7/sperm/re_nanoseq/twinsUK/burdenCorrection/
+cat testisSamples/jobLogs/cor.* | grep "RESULT" > testisCorrected.tsv
+
+```
+
+### Process result
+```{r burdCor}
+testisBurdensVAFprop <- read_tsv(paste0(path, "twinsUK/panBodyMuts.tsv"), col_types = cols()) |> 
+  filter(TissueType1 == "testis" & Seq_X > 15) |>
+  drop_na(Clonal_Mutations_per_genome2) |> 
+  mutate(muts = Clonal_Mutations_per_genome2) |> #Make haploid
+  select(Prop_clonal2, Sample, Age) 
+testisBurdenCorr <- read_tsv(paste0(path, "twinsUK/burdenCorrection/testisCorrected.tsv"), col_types = '--cdddddddd', col_names = c("Sample", "mutsOrig", "c20cov", "muts_c20", "muts_c20nano", "muts_c20nano_tri", "c20cov_nano", "burden", "burden_tri")) |>
+  left_join(testisBurdensVAFprop, by = join_by(Sample)) |> 
+  drop_na(Prop_clonal2) |> 
+  mutate(burdenClonal = burden * Prop_clonal2) |> 
+  mutate(burdenTriClonal = burden_tri * Prop_clonal2) |> 
+  select(Sample, age_at_sampling = Age, burden:burdenTriClonal)
+
+write_tsv(testisBurdenCorr, paste0(path, "twinsUK/testisBurdenCorr.tsv"))
+
+```
+
+## Signatures
+### Install
+```{bash sigs}
+cd $MN7/sperm/re_nanoseq/twinsUK/signatures/
+nano run_SigProfiler_Extractor.v1.8.py
+#!/usr/bin/env python
+import sys, argparse
+from SigProfilerExtractor import sigpro as sig
+
+parser = argparse.ArgumentParser()
+parser.add_argument("input", help="input matrix file or folder contating vcf files")
+parser.add_argument("-o", "--output", type=str, default="output_folder", help="output folder")
+parser.add_argument("-d", "--data_type", type=str, default="vcf")
+parser.add_argument("-r", "--reference", type=str, default="GRCh37")
+args = parser.parse_args()
+print(args)
+
+if __name__=="__main__":
+	sig.sigProfilerExtractor(args.data_type, args.output, args.input, cpu=8, gpu=True, reference_genome=args.reference, context_type = "96,ID", opportunity_genome=args.reference, cosmic_version="3.3", minimum_signatures=1, maximum_signatures=10)
+
+```
+
+### Submit standard
+```{bash sigs}
+
+##Twins UK samples
+#Move VCFs to input folder
+cd $MN7/sperm/re_nanoseq/twinsUK
+mkdir -p signatures signatures/sigprofiler_in signatures/headerless/ signatures/jobLogs 
+mkdir -p signatures/sigprofiler_Feb24 signatures/sigprofiler_Feb24norm
+mkdir -p signatures/sigprofiler_tissue_in signatures/sigprofiler_tissue
+
+#All samples
+for sample in `cut -f 2 reFilteredTwinsUK.txt`;
+  do echo $sample
+  grep 'PASS' output/variantsFiltered0.vcf | grep $sample | cut -f 1-8 > signatures/headerless/$sample.vcf
+  cat signatures/vcfHeader.txt signatures/headerless/$sample.vcf > signatures/sigprofiler_in/$sample.vcf
+done
+
+#Tissue level combo
+cd $MN7/sperm/re_nanoseq/twinsUK
+rm signatures/headerless/blood.vcf
+rm signatures/sigprofiler_tissue_in/blood.vcf
+for sample in `grep "Blood" reFilteredTwinsUK.txt | cut -f 2`;
+  do echo $sample
+  grep 'PASS' output/variantsFiltered0.vcf | grep $sample | cut -f 1-8 >> signatures/headerless/blood.vcf
+done
+cat signatures/vcfHeader.txt signatures/headerless/sperm.vcf > signatures/sigprofiler_tissue_in/sperm.vcf
+
+cd $MN7/sperm/re_nanoseq/twinsUK
+rm signatures/headerless/sperm.vcf
+rm signatures/sigprofiler_tissue_in/sperm.vcf
+for sample in `grep "Sperm" reFilteredTwinsUK.txt | cut -f 2`;
+  do echo $sample
+  grep 'PASS' output/variantsFiltered0.vcf | grep $sample | cut -f 1-8 >> signatures/headerless/sperm.vcf
+done
+cat signatures/vcfHeader.txt signatures/headerless/sperm.vcf > signatures/sigprofiler_tissue_in/sperm.vcf
+
+#Tissue level split
+cd $MN7/sperm/re_nanoseq/twinsUK
+cp signatures/sigprofiler_tissue_in/sperm.vcf signatures/sigprofiler_sperm_in/sperm.vcf 
+cp signatures/sigprofiler_tissue_in/blood.vcf signatures/sigprofiler_blood_in/blood.vcf 
+
+#Run signature extraction with no matrix normalization
+conda activate /lustre/scratch126/casm/team294rr/rs30/anaconda3/envs/sigprofiler_env
+cd $MN7/sperm/re_nanoseq/twinsUK/signatures/
+bsub -J sigprofiler_Feb24 -o jobLogs/sig.%J.out -e jobLogs/sig.%J.err -q gpu-basement -gpu - -R 'select[mem>=32000] rusage[mem=32000]' -M32000 -env "all" "python run_SigProfiler_Extractor.v1.8.py sigprofiler_in -o sigprofiler_Feb24"
+
+#Run signature extraction with only tissue level
+conda activate /lustre/scratch126/casm/team294rr/rs30/anaconda3/envs/sigprofiler_env
+cd $MN7/sperm/re_nanoseq/twinsUK/signatures/
+bsub -J sigprofiler_tissue -o jobLogs/sig.%J.out -e jobLogs/sig.%J.err -q gpu-basement -gpu - -R 'select[mem>=32000] rusage[mem=32000]' -M32000 -env "all" "python run_SigProfiler_Extractor.v1.8.py sigprofiler_tissue_in -o sigprofiler_tissue"
+
+conda activate /lustre/scratch126/casm/team294rr/rs30/anaconda3/envs/sigprofiler_env
+cd $MN7/sperm/re_nanoseq/twinsUK/signatures/
+bsub -J sigprofiler_sperm -o jobLogs/sig.%J.out -e jobLogs/sig.%J.err -q gpu-basement -gpu - -R 'select[mem>=32000] rusage[mem=32000]' -M32000 -env "all" "python run_SigProfiler_Extractor.v1.8.py sigprofiler_sperm_in -o sigprofiler_sperm"
+
+conda activate /lustre/scratch126/casm/team294rr/rs30/anaconda3/envs/sigprofiler_env
+cd $MN7/sperm/re_nanoseq/twinsUK/signatures/
+bsub -J sigprofiler_blood -o jobLogs/sig.%J.out -e jobLogs/sig.%J.err -q gpu-basement -gpu - -R 'select[mem>=32000] rusage[mem=32000]' -M32000 -env "all" "python run_SigProfiler_Extractor.v1.8.py sigprofiler_blood_in -o sigprofiler_blood"
+```
+
+### Matrix normalization 
+#### Create Count File
+``` {bash matrixNorm}
+cd $MN7/sperm/re_nanoseq/twinsUK
+rm signatures/trinucCounts.tsv
+#Get trinucleotide counts for matrix normalization
+for sample in `cut -f 2 reFilteredTwinsUK.txt`;
+  do  echo $sample
+  grep -v  'tri_bg' $MN7/sperm/NanoSeq/Nextflow/outNextflow/NanoSeq/$sample/post/*.trint_counts_and_ratio2genome.tsv | sed "s/$/\t$sample/" >> signatures/trinucCounts.tsv
+done
+
+```
+
+#### Normalize matrix by nanoseq coverage
+```{r signaturesNormalize}
+
+normalizeMatrix <- function(matrix, triRates) {
+  #Read in trinuc counts and ratio to full genome
+  backgroundRates <- read_tsv(triRates, col_types = cols(), col_names = c("trinuc", "trinucCount", "ratio2genome", "PD_ID")) 
+  
+  #Get mutation matrix generated by sigprofiler and then correct for ratio to genome
+  mutMatrix <- read_tsv(matrix, col_types = cols()) |> 
+    pivot_longer(cols = starts_with("PD"), names_to = "PD_ID", values_to = "mutCount") |> 
+    mutate(trinuc = paste0(str_sub(MutationType, 1,1), str_sub(MutationType, 3,3),str_sub(MutationType, 7,7))) |> 
+    left_join(backgroundRates, by = c("PD_ID", "trinuc")) |> 
+    mutate(normCount = round(mutCount * 1/ratio2genome)) |> 
+    select(MutationType, PD_ID, normCount)  |> 
+    pivot_wider(names_from = PD_ID, values_from = normCount)
+  return(mutMatrix)
+}
+
+allTriRates <- paste0(path, "twinsUK/signatures/trinucCounts.tsv")
+twinsUKmatrix <- paste0(path, "twinsUK/signatures/sigprofiler_in/output/SBS/sigprofiler_in.SBS96.all")
+
+matrixNorm <- normalizeMatrix(twinsUKmatrix, allTriRates) |> select(MutationType, all_of(reSamplesTwinsUKFiltered |> pull(PD_ID))) 
+matrixNormSperm <- matrixNorm  |> select(MutationType, all_of(reSamplesTwinsUKFiltered |> filter(tissue == "Sperm") |> pull(PD_ID)))
+matrixNormBlood <- matrixNorm  |> select(MutationType, all_of(reSamplesTwinsUKFiltered |> filter(tissue == "Blood") |> pull(PD_ID)))
+
+write_tsv(matrixNorm, paste0(path, "twinsUK/signatures/sigprofiler_in/output/SBS/sigprofiler_in.SBS96.normalized"), col_names = T)
+write_tsv(matrixNormSperm, paste0(path, "twinsUK/signatures/sigprofiler_in/output/SBS/sigprofiler_in.SBS96.normalized.sperm"), col_names = T)
+write_tsv(matrixNormBlood, paste0(path, "twinsUK/signatures/sigprofiler_in/output/SBS/sigprofiler_in.SBS96.normalized.blood"), col_names = T)
+
+# Write out files for HDP analysis
+write_tsv(matrixNorm, paste0(localPath, "signatures/RE_sperm_blood.SBS96.normalized.tsv"))
+indelMatrix <- read_tsv(paste0(path, "twinsUK/signatures/sigprofiler_in/output/ID/sigprofiler_in.ID83.all"), col_types = cols())
+
+write_tsv(indelMatrix, paste0(localPath, "signatures/RE_sperm_blood.ID83.tsv"))
+write_tsv(reSamplesTwinsUKmeta |> select(PD_ID, tissue), paste0(localPath, "signatures/RE_sperm_blood.metadata.tsv"))
+```
+
+#### Submit normalized
+```{bash sigs}
+conda activate /lustre/scratch126/casm/team294rr/rs30/anaconda3/envs/sigprofiler_env
+cd $MN7/sperm/re_nanoseq/twinsUK/signatures/
+bsub -J allMar24norm -o jobLogs/allMar24norm.%J.out -e jobLogs/allMar24norm.%J.err -q gpu-basement -gpu - -R 'select[mem>=32000] rusage[mem=32000]' -M32000 -env "all" "python run_SigProfiler_Extractor.v1.8.py sigprofiler_in/output/SBS/sigprofiler_in.SBS96.normalized --data_type matrix -o allMar24norm"
+bsub -J sigprofiler_spermMar24 -o jobLogs/spermMar24.%J.out -e jobLogs/spermMar24.%J.err -q gpu-basement -gpu - -R 'select[mem>=32000] rusage[mem=32000]' -M32000 -env "all" "python run_SigProfiler_Extractor.v1.8.py sigprofiler_in/output/SBS/sigprofiler_in.SBS96.normalized.sperm --data_type matrix -o spermMar24"
+bsub -J sigprofiler_bloodMar24 -o jobLogs/bloodMar24.%J.out -e jobLogs/bloodMar24.%J.err -q gpu-basement -gpu - -R 'select[mem>=32000] rusage[mem=32000]' -M32000 -env "all" "python run_SigProfiler_Extractor.v1.8.py sigprofiler_in/output/SBS/sigprofiler_in.SBS96.normalized.blood --data_type matrix -o bloodMar24"
+```
+
+## Variant annotation
+### VEP input files
+```{r vep}
+# Format to annotated with VEP then read back in annotated and merge to original file
+vepInput <- read_tsv(paste0(path,"twinsUK/output/variantsFiltered0.tsv"), col_types = cols()) |> 
+  mutate(blank = ".") |> 
+  # ID useful for joining indels back up
+  mutate(id = paste(chr,start,ref,alt, sep = "_")) |> 
+  select(chr, start, id, ref, alt, blank2 = blank, blank3 = blank, blank4 = blank) |> 
+  arrange(chr, as.numeric(start)) 
+
+write_tsv(vepInput, paste0(path, "twinsUK/postNextflow/vep/filteredVars.vcf"), col_names = F) 
+
+```
+
+### Run VEP
+```{bash maf}
+cd $MN7/sperm/re_nanoseq/twinsUK/postNextflow/vep
+export PATH="/lustre/scratcvh126/casm/team294rr/rs30/git_repositories/ensembl-vep/htslib:/software/jdk-11.0.2/bin/:$PATH"
+export PERL5LIB="/lustre/scratcvh126/casm/team294rr/rs30/git_repositories/ensembl-vep:/nfs/users/nfs_r/rs30/perl5/lib/perl5:/nfs/users/nfs_r/rs30/perl5/lib/perl5/site_perl:/lustre/scratcvh126/casm/team294rr/rs30/000_SOFTWARE/lib/perl5:$PERL5LIB"
+
+rm ../jobLogs/*Vars_vep.*
+ls *Vars.vcf | while read SAMPLE ; do echo "/lustre/scratch126/casm/team294rr/rs30/git_repositories/ensembl-vep/vep -i $SAMPLE -o out_$SAMPLE.tsv --tab \
+--dir /lustre/scratch126/casm/team294rr/rs30/000_SOFTWARE/vep/ --species homo_sapiens --cache --offline --force --refseq --no_stats --fork 4 --assembly GRCh37 --fasta /lustre/scratch126/casm/team294rr/rs30/000_SOFTWARE/vep/homo_sapiens/Homo_sapiens.GRCh37.75.dna.primary_assembly.fa \
+--symbol --af_gnomad --pick --show_ref_allele \
+--custom /lustre/scratch126/casm/team294rr/External_Databases/Annotations/clinvar_20230527.vcf.gz,ClinVar,vcf,exact,0,CLNDN,CLNSIG,CLNSIGCONF,CLNDISDB \
+--custom $T/methylation/testisMeth19.bed.gz,methylation,bed,exact,0" | bsub -e ../jobLogs/out.${SAMPLE%.vcf}_vep.err -o ../jobLogs/out.${SAMPLE%.vcf}_vep.out -J ${SAMPLE%.vcf}_vep -n4 -q normal -R 'select[mem>=10000] rusage[mem=10000] span[hosts=1]' -M10000  -env "all" ; done 
+```
+
+#### Process Variants
+```{r processVEP}
+vepOutput <- read_tsv(paste0(path, "twinsUK/postNextflow/vep/out_filteredVars.vcf.tsv"), col_types = cols(), comment = "##") |> 
+  select(id = `#Uploaded_variation`, csq = Consequence, IMPACT, gene = SYMBOL, gnomAD_AF, PHEN = ClinVar_CLNDN, CLNSIG = ClinVar_CLNSIG, CLNSIGCONF = ClinVar_CLNSIGCONF, methylation) |> 
+  distinct()
+
+filteredVarsVEP <- read_tsv(paste0(path,"twinsUK/output/variantsFiltered0.tsv"), col_types = cols()) |> 
+  left_join(vepInput |> select(chr:alt) |> distinct() |> 
+              left_join(vepOutput, by = join_by(id)) |> select(-id), by = join_by(chr, start, ref, alt)) |> 
+  filter(PD_ID %in% reSamplesTwinsUKFiltered$PD_ID) |> 
+  mutate(csq = str_remove(csq, ",.*")) |> 
+  mutate(csq = str_remove(csq, "_variant")) |> 
+  mutate(csqSimple = if_else(csq %in% c("3_prime_UTR", "5_prime_UTR", "downstream_gene", "intergenic", "intron", "non_coding_transcript_exon", "splice_region", "upstream_gene"), "non-coding", csq)) |> 
+  mutate(csqSimple = if_else(csq %in% c("stop_gained", "splice_acceptor", "splice_donor"), "nonsense+splice", csqSimple)) |> 
+  mutate(csqSimple = if_else(csq %in% c("frameshift", "inframe_deletion", "inframe_insertion"), "coding-indel", csqSimple)) |> 
+  # Criteria for labeling variants as ClinVar path or not:
+  mutate(ClinVar = if_else(CLNSIG %in% c("Pathogenic/Likely_pathogenic", "Pathogenic", "Likely_pathogenic") | 
+                             CLNSIG == "Conflicting_interpretations_of_pathogenicity" & 
+                              (str_detect(CLNSIGCONF, "Pathogenic") | str_detect(CLNSIGCONF, "Likely_pathogenic") & !str_detect(CLNSIGCONF, "enign")
+                                 ), T, F)) |> 
+  select(-c(FILTER, QPOS, DPLX_ASXS,BULK_ASXS))
+
+write_tsv(filteredVarsVEP, paste0(path,"twinsUK/output/variantsFiltered.tsv"))
+```
+
+
