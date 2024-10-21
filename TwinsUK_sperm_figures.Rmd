@@ -1,5 +1,5 @@
 ---
-title: "nanoseqDataPrep"
+title: "TwinsUKspermNanoseqFigures"
 author: "Matt Neville"
 date: "17/01/2022"
 output: html_document
@@ -15,6 +15,7 @@ outputPath <- "PublicTwinsUKCode/output/"
 
 library(egg)
 library(scales)
+library(ggExtra)
 library(readxl)
 library(ggh4x)
 library(ggrepel)
@@ -22,6 +23,7 @@ library(patchwork)
 library(RColorBrewer)
 library(ggbeeswarm)
 library(stringi)
+library(ggbreak)
 library(jpeg)
 library(ggforce)
 library(ggpubr)
@@ -34,35 +36,77 @@ library(tidyverse)
 
 ## Data Sperm+Blood RE 
 ```{r samples}
+# Metadata
 reSamplesTwinsUKmeta <- read_tsv(paste0(inputControlled,"reSamplesTwinsUKFiltered.tsv"), col_types = cols()) 
+
+# Sperm counting
 spermCounts <- read_tsv(paste0(inputControlled, "spermCounts.tsv"), col_types = cols()) 
 normStain <- readJPEG(paste0(inputControlled, "Norm200_100um.jpg"))
 oligoStain <- readJPEG(paste0(inputControlled, "Oligo_100um.jpg"))
 azooStain <- readJPEG(paste0(inputControlled, "Azoo_100um.jpg"))
+
+# QC metrics
 maskedCounts <- read_tsv(paste0(inputControlled, "maskedCounts.tsv"), col_types = cols()) 
+
+# Analysis variants, burden, coverage, signatures
 analysisREvars <- read_tsv(paste0(inputControlled,"reVariantsFiltered.tsv"), col_types = cols()) |> 
   left_join(reSamplesTwinsUKmeta |> select(PD_ID, tissue, age_at_sampling), by = "PD_ID")
-
 burdenSummary <- read_tsv(paste0(inputControlled, "reBurdensFiltered.tsv"), col_types = cols()) |> 
   left_join(reSamplesTwinsUKmeta, by = "PD_ID") |> mutate(burden = burdenCorr)
-
 covSummary <- read_tsv(paste0(inputControlled, "reCovStats.txt"), col_types = cols(), col_names = c("bpUnique","bpTotal", "mean", "PD_ID"))
-
 reSignatures <- read_tsv(paste0(inputControlled, "Decompose_Solution_Activities.txt"), col_types = cols())
 
+# External datasets for comparison
+# From Sasani et al, 2019:  https://github.com/quinlan-lab/ceph-dnm-manuscript
 pat_dnmsData <- read_csv(paste0(inputPublic, "second_gen.dnms.summary.csv"), col_types = cols()) 
-testisBurdenData <- read_tsv(paste0(inputPublic, "testisBurdenCorr.tsv"), col_types = cols())
+# From Moore et al 2021
+testisBurdenData <- read_tsv(paste0(inputPublic, "testisBurdenCorr.tsv"), col_types = cols()) 
 testisIndels <- read_tsv(paste0(inputPublic, "panBodyMuts.tsv"), col_types = cols())
-
 
 ```
 
 ## Data Sperm Targ+Exome
 ```{r samples}
-covSummaryTarg <- read_tsv(paste0(inputControlled, "covSummaryTargMerged.tsv"), col_types = cols())
+
+# Samples
+targetedSamplesFiltered <- read_tsv(paste0(inputControlled,"targetedSamplesFiltered.tsv"), col_types = cols()) 
+
+# Variants
+analysisTargVars <- read_tsv(paste0(inputControlled, "analysisTargVars.tsv"), col_types = cols()) |> 
+  mutate(indiv = str_sub(PD_ID, 1, 7)) #All vars
+collapsedTargVars <- read_tsv(paste0(inputControlled, "collapsedTargVars.tsv"), col_types = cols()) #Collapsed by sample
+
+# Burdens
+burdenTargeted <- read_tsv(paste0(inputControlled, "burdensFiltered.tsv"), col_types = cols()) |> left_join(targetedSamplesFiltered , by = "Sample_PD_ID")
 burdenCombinedCoding <- read_tsv(paste0(inputControlled, "burdenCombinedCoding.tsv"), col_types = cols())
 
+# Coverage
+covSummaryTarg <- read_tsv(paste0(inputControlled, "covSummaryTargMerged.tsv"), col_types = cols())
 
+# Gene dNdS results
+sigGenes <- read_tsv(paste0(inputPublic, "sigGenes.tsv"), col_types = cols())
+simpleAnnotGenes <- read_csv(paste0(inputPublic, "simpleAnnotGenes.csv"), col_types = cols())
+sig_dndsAll <- read_tsv(paste0(inputPublic, "SupTable3_sig_dndsAll.tsv"), col_types = cols())
+sig_dndsRHTall <- read_tsv(paste0(inputPublic, "SupTable4_sig_dndsRHT.tsv"), col_types = cols())
+compGene_dNdScomb <- read_tsv(paste0(inputPublic, "compareGene_dNdScomb.tsv"), col_types = cols())
+hotspots <- read_tsv(paste0(inputPublic, "siteHotspots_dnds_sig.tsv"),col_types = cols()) |> 
+  mutate(var = paste(chr,pos,ref,mut, sep = "_"))
+
+# Global dNdS results
+geneSetEnrich <- read_tsv(paste0(inputPublic, "geneSet_dNdS.tsv"), col_types = cols())
+compGlobal_dNdS <- read_tsv(paste0(inputPublic, "compGlobal_dNdS.tsv"), col_types = cols())
+ageGroup_dnds <- read_tsv(paste0(inputPublic, "ageGroup_dnds.tsv"), col_types = cols())
+external_global_dNdS <- read_tsv(paste0(inputPublic, "external_global_dNdS.tsv"), col_names = c("name","mle","cilow","cihigh","muts", "n_genes", "geneGroup", "group", "n_drivers", "cilowDrivers", "cihighDrivers"),  col_types = cols())
+mutRateEnrich <- read_tsv(paste0(inputPublic, "mutRateEnrich.tsv"), col_types = cols()) 
+mutRatesTriPenta <- read_tsv(paste0(inputPublic, "SupTable6_pentaMutRates.tsv"), col_types = cols()) 
+
+# Vaf sum files
+dddLOF <- read_tsv(paste0(inputPublic, "dddList.tsv"), col_types = 'c') |> pull(gene)
+vafSumsExpSNV <- read_tsv(paste0(inputControlled, "valsExpectedTarg.tsv"), col_types = 'dcc', col_names = c("vafSum", "Sample_PD_ID", "vafGroup")) 
+vafSumsExpIndel <- read_tsv(paste0(inputControlled, "valsExpectedIndelTarg.tsv"), col_types = ) 
+
+# gnomad Z-scores
+gnomadConstraintAllGenes <- read_tsv(paste0(inputPublic, "gnomadConstraintAllGenes.tsv"), col_types = cols()) 
 
 ```
 
@@ -607,14 +651,16 @@ CDE
   (bloodEffNano + labs(tag = "c") + bloodEff_ind + labs(tag = "d") + p_ratioBurden + labs(tag = "e") + p_ratioIndelBurden + labs(tag = "f") + plot_layout(widths = c(3,3,1,1)))/
   ((pDomains  + labs(tag = "g") + trinucSperm + trinucBlood + plot_layout(axis_titles = "collect")) + free(pSigsHDP + labs(tag = "h"))+ plot_spacer() + 
   plot_layout(design = layout, heights = c(1,15,15), widths = c(99,99,1))) + 
-  plot_layout(heights = c(3,2,2)) 
+  plot_layout(heights = c(3,2,2)) &
+    theme(plot.tag = element_text(face = 'bold'))
 
 png(paste0(outputPath, 'main/Fig1_BurdenSigs.png'), height=12, width=14, res = 300, units = "in")
 (p_SpermTestisEff + labs(tag = "a") + p_SpermEffIndels + labs(tag = "b"))/
   (bloodEffNano + labs(tag = "c") + bloodEff_ind + labs(tag = "d") + p_ratioBurden + labs(tag = "e") + p_ratioIndelBurden + labs(tag = "f") + plot_layout(widths = c(3,3,1,1)))/
   ((pDomains  + labs(tag = "g") + trinucSperm + trinucBlood + plot_layout(axis_titles = "collect")) + free(pSigsHDP + labs(tag = "h"))+ plot_spacer() + 
   plot_layout(design = layout, heights = c(1,15,15), widths = c(99,99,1))) + 
-  plot_layout(heights = c(3,2,2))
+  plot_layout(heights = c(3,2,2)) &
+    theme(plot.tag = element_text(face = 'bold'))
 dev.off()
 
 pdf(paste0(outputPath, 'main/Fig1_BurdenSigs.pdf'), height=12, width=14, onefile = F)
@@ -622,14 +668,757 @@ pdf(paste0(outputPath, 'main/Fig1_BurdenSigs.pdf'), height=12, width=14, onefile
   (bloodEffNano + labs(tag = "c") + bloodEff_ind + labs(tag = "d") + p_ratioBurden + labs(tag = "e") + p_ratioIndelBurden + labs(tag = "f") + plot_layout(widths = c(3,3,1,1)))/
   ((pDomains  + labs(tag = "g") + trinucSperm + trinucBlood + plot_layout(axis_titles = "collect")) + free(pSigsHDP + labs(tag = "h"))+ plot_spacer() + 
   plot_layout(design = layout, heights = c(1,15,15), widths = c(99,99,1))) + 
-  plot_layout(heights = c(3,2,2))
+  plot_layout(heights = c(3,2,2)) &
+    theme(plot.tag = element_text(face = 'bold'))
 
 dev.off()
+```
+
+## Figure 2
+
+
+### Gene dN/dS
+#### dNdS theme
+```{r theme_dNdS}
+classOrder <- c("syn", "mis", "non", "spl", "non+spl", "ind")
+classOrderLong <- c("synonymous", "missense", "nonsense", "splice", "nonsense+splice", "indel")
+geneGroupOrder <- c("excess_other", "excess_dNdS_novel",  "excess_known", "expected")
+mutType_colours <- c("synonymous" = "grey70",
+                     "missense" = "cadetblue",
+                    "nonsense" = "darkorchid4",
+                    "nonsense+splice" = "darkorchid3",
+                    "splice" = "darkorchid2",
+                    "indels" = "chocolate3",
+                    "indel" = "chocolate3",
+                    "syn" = "grey70",
+                     "mis" = "cadetblue",
+                    "non" = "darkorchid4",
+                    "non+spl" = "darkorchid3",
+                    "spl" = "darkorchid2",
+                    "ind" = "chocolate3")
+
+knownPosSelection <- c("PTPN11", "FGFR3", "FGFR2", "HRAS", "RET", "BRAF", "KRAS", "MAP2K1", "MAP2K2", "SOS1", "CBL", "RAF1", "SMAD4")
+
+dndsPlotObj <- sigGenes |> 
+  mutate(totMuts = n_syn+n_mis+n_spl+n_non+n_ind) |> 
+  #Group non+spl
+  mutate(`n_non+spl` = n_spl+n_non) |> select(-c(n_spl,n_non)) |>
+  mutate(testSig = factor(testSig, levels = c("Exome-wide", "Restricted hypothesis"))) |>
+  mutate(gene_name = fct_reorder(gene_name, totMuts, .desc = T))
+```
+
+#### Gene dNdS
+```{r fig_gene_dNdS, fig.height = 8, fig.width = 9}
+p_dndsMuts <- dndsPlotObj |> 
+  mutate(testSig = str_replace(testSig, "Restricted hypothesis", "Restricted\nhypothesis")) |> 
+  mutate(testSig = factor(testSig , levels = c("Exome-wide", "Restricted\nhypothesis"))) |> 
+  pivot_longer(cols = starts_with("n_"), names_to = "class", names_prefix = "n_", values_to = "muts") |> 
+  mutate(class = str_replace(class, "non\\+spl", "nonsense\\+splice")) |> 
+  mutate(class = str_replace(class, "syn", "synonymous")) |> 
+  mutate(class = str_replace(class, "mis", "missense")) |> 
+  mutate(class = str_replace(class, "ind", "indel")) |> 
+  mutate(class = fct_relevel(class, rev(classOrderLong))) |>
+  ggplot(aes(x = gene_name, y = muts, fill = class)) + 
+    geom_bar(position="stack", stat="identity") +
+  scale_fill_manual(values = mutType_colours, name = "Mutation Class") +
+  ggforce::facet_col(vars(testSig), scales = "free_y", space = "free", strip.position = "left") +
+  scale_y_continuous(expand = c(0,0), limits = c(0,155)) +
+  coord_flip() +
+  ylab("Mutations") +
+  theme_pubr() +
+  theme(axis.title.y = element_blank(),  strip.placement = "outside",
+        strip.background = element_blank(), strip.text =element_text(size = 14),
+        legend.position=c(.65,.8)) 
+
+p_dndsRatios <- dndsPlotObj |> 
+  mutate(testSig = factor(testSig , levels = c("Exome-wide", "Restricted hypothesis"))) |> 
+  pivot_longer(cols = starts_with("w"), names_to = "class", names_prefix = "w", values_to = "ratio") |> 
+  filter(class != "spl_cv") |> 
+  mutate(class = str_remove(class, "_cv")) |> 
+  mutate(class = str_replace(class, "non", "nonsense+splice")) |> 
+  mutate(class = fct_relevel(class, classOrder)) |>
+  ggplot(aes(x = gene_name, y = ratio, fill = class)) + 
+    geom_bar(position="dodge", stat="identity") +
+  scale_fill_manual(values = mutType_colours, guide = "none") +
+  ggforce::facet_col(vars(testSig), scales = "free_y", space = "free", strip.position = "right") + 
+  scale_y_continuous(trans=scales::pseudo_log_trans(base = 10), expand = c(0,0), breaks = c(0,1,10,50, 100,200), labels = c(0,1,10,50,100,200)) +
+  geom_hline(yintercept = 1, linetype = 'dashed', colour = "grey40") + 
+  coord_flip() +
+  ylab("dN/dS Observed/Expected") + 
+  xlab("Targeted") +
+  theme_pubr() +
+  theme(axis.title.y = element_blank(), axis.text.y = element_blank(), strip.placement = "outside",
+        legend.position="none", strip.background = element_blank(), strip.text = element_text(colour = "white"), axis.ticks.y = element_blank()) 
+
+p_dndsMuts + p_dndsRatios + plot_layout(widths = c(1, 1.5)) 
+
 ```
 
 
 
 
+#### Heatmaps
+```{r heatmap, fig.height=10, fig.width=14}
+
+mechanism_heatmap <- simpleAnnotGenes |>
+  select(gene, `Sperm\nselection` = germlineMechanism) |> 
+  pivot_longer(cols = c(`Sperm\nselection`)) |> 
+  left_join(dndsPlotObj |> rename(gene = gene_name) |> select(gene, testSig, totMuts), by = join_by(gene))|> 
+  mutate(gene = fct_reorder(gene, totMuts, .desc = T)) |> 
+  mutate(value = factor(value, levels = c("Missense Only", "LOF"), ordered = TRUE)) |>
+  mutate(name = factor(name, levels = c("Sperm\nselection"), ordered = TRUE)) |>
+  ggplot(aes(y = name, x = gene, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_manual(values = c("cadetblue","darkorchid3"), name = "Sperm mutation\nenrichment") +  # Customize the colors
+  ggforce::facet_col(vars(testSig), scales = "free_y", space = "free") +
+  scale_y_discrete(expand = c(0,0)) +
+  coord_flip() +
+  ylab("Sperm\nenrich") +
+  theme_pubr() +
+  theme(axis.title.y = element_blank(), axis.text = element_blank(), strip.placement = "outside",strip.background = element_blank(), strip.text = element_blank(), axis.ticks.y = element_blank()) 
+
+cancer_heatmap <- simpleAnnotGenes |> 
+  mutate(cancerGene = as.character(Tier)) |> 
+  mutate(cancerGene = replace_na(cancerGene, "None")) |> 
+  mutate(cancerGene = if_else(cancerGene == "1", "Tier 1", cancerGene)) |> 
+  mutate(cancerGene = if_else(cancerGene == "2", "Tier 2", cancerGene)) |> 
+  select(gene, cancerGene) |> 
+  pivot_longer(cols = c(cancerGene)) |> 
+  left_join(dndsPlotObj |> rename(gene = gene_name) |> select(gene, testSig, totMuts), by = join_by(gene)) |> 
+  mutate(gene = fct_reorder(gene, totMuts, .desc = T)) |> 
+  mutate(value = factor(value, levels = c("Tier 1", "Tier 2", "None"), ordered = TRUE)) |> 
+  ggplot(aes(y = name, x = gene, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_manual(values = c("#0081AF", "#2DC7FF", "grey90"), name = "Cancer Gene\nCensus tier") + 
+  ggforce::facet_col(vars(testSig), scales = "free_y", space = "free") +
+  scale_y_discrete(expand = c(0,0)) +
+  coord_flip() +
+  ylab("Cancer\ngene") + 
+  theme_pubr() +
+  theme(axis.title.y = element_blank(), axis.text = element_blank(), strip.placement = "outside",strip.background = element_blank(), strip.text = element_blank(), axis.ticks.y = element_blank()) 
+
+disease_heatmap <- simpleAnnotGenes |> 
+  mutate(DD_conf = if_else(is.na(DD_conf) & !is.na(OMIM_Phenotypes), "OMIM only", DD_conf)) |> 
+  select(gene, DD_conf) |> 
+  mutate(DD_conf = replace_na(DD_conf, "Neither")) |> 
+  mutate(DD_conf = if_else(DD_conf %in% c("strong", "moderate"), "Strong/moderate DD", DD_conf)) |> 
+  mutate(DD_conf = if_else(DD_conf %in% c("definitive"), "Definitive DD", DD_conf)) |> 
+  mutate(DD_conf = if_else(DD_conf %in% c("limited"), "Limited DD", DD_conf)) |> 
+  pivot_longer(cols = c(DD_conf)) |> 
+  left_join(dndsPlotObj |> rename(gene = gene_name) |> select(gene, testSig, totMuts), by = join_by(gene)) |> 
+  mutate(gene = fct_reorder(gene, totMuts, .desc = T)) |> 
+  mutate(value = factor(value, levels = c("Definitive DD", "Strong/moderate DD",  "Limited DD",  "OMIM only", "Neither"), ordered = TRUE)) |> 
+  ggplot(aes(y = name, x = gene, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_manual(values = c("#1F2232", "#596475", "#8e9aaf", "#5e503f", "grey90"), name = "Disease evidence in\ndevelopmental\ndisorders (DD)\nor OMIM") + 
+  ggforce::facet_col(vars(testSig), scales = "free_y", space = "free") +
+  scale_y_discrete(expand = c(0,0)) +
+  coord_flip() +
+  ylab("Disease\nevidence") + 
+  theme_pubr() +
+  theme(axis.title.y = element_blank(), axis.text = element_blank(), strip.placement = "outside",strip.background = element_blank(), strip.text = element_blank(), axis.ticks.y = element_blank()) 
+
+
+pathway_heatmap <- simpleAnnotGenes |> 
+  select(gene, pathway = pathwayCurated) |> 
+  pivot_longer(cols = c(pathway)) |> 
+  left_join(dndsPlotObj |> rename(gene = gene_name) |> select(gene, testSig, totMuts), by = join_by(gene)) |> 
+  mutate(gene = fct_reorder(gene, totMuts, .desc = T)) |> 
+  mutate(value = factor(value, levels = c("RAS-MAPK signalling", "BMP signalling", "Wnt signalling", "Epigenetic modifier", "RNA metabolism", "Other"), ordered = TRUE)) |>
+  ggplot(aes(y = name, x = gene, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_manual(values = c("#5bc0eb", "#9bc53d", "#e5446d", "#8C2309", "#594f3b","grey90"), name = "Geneset") + 
+  ggforce::facet_col(vars(testSig), scales = "free_y", space = "free") +
+  scale_y_discrete(expand = c(0,0)) +
+  coord_flip() +
+  ylab("Geneset") + 
+  theme_pubr() +
+  theme(axis.title.y = element_blank(), axis.text = element_blank(), strip.placement = "outside",strip.background = element_blank(), strip.text = element_blank(), axis.ticks.y = element_blank()) 
+
+p_dndsMuts + labs(tag = "a") + p_dndsRatios + labs(tag = "b") + (mechanism_heatmap + labs(tag = "c") + cancer_heatmap + disease_heatmap + pathway_heatmap + plot_layout(guides = "collect", ncol = 4) & theme(legend.position='right', legend.direction="vertical")) +
+  plot_layout(widths = c(1,1,1)) 
+
+```
+
+### Global dN/dS
+#### Cancer Pathways
+```{r pathways}
+allDatasetVal <- compGlobal_dNdS |> filter(test == "BasePairCov + CpGmeth + Penta" & name == "all") |> pull(mle)
+
+globalPathwaydnds0 <- read_tsv(paste0(inputPublic, "geneSetEnrich.tsv"), col_types = cols()) |> 
+  filter(str_detect(geneGroup, "pathway"))
+  
+p_globalPathwaydnds <- globalPathwaydnds0 |> 
+  mutate(Pathway = str_remove(geneGroup, "pathway_")) |> 
+  mutate(label = paste0(Pathway, "\n(n=", n_genes, ")")) |> 
+  filter(name == "all") |>
+  arrange(mle) |> 
+  mutate(label = fct_inorder(label)) |> 
+  mutate(list = "Cancer gene pathway") |>
+  ggplot(aes(label, mle, fill = list)) +
+  geom_hline(yintercept = allDatasetVal, linetype = 'dashed', colour = "#f46d43") + 
+  geom_hline(yintercept = 1, linetype = 'dashed') +   
+  geom_errorbar(aes(ymin=cilow, ymax=cihigh), colour="black", width=0) +
+  geom_point(position = position_dodge(width = 0.5), col='white', size = 5, pch = 21, stroke = 0.25) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,NA)) +
+  scale_fill_manual(values = c("#5bc0eb")) + 
+  ylab("Gene set dN/dS") +
+  theme_pubr() +
+  theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 0.5), axis.title.x = element_blank(),
+        legend.title = element_blank(), legend.text = element_text(size = 14), legend.position = c(0.3,0.8), strip.background = element_blank(), strip.text = element_blank(),
+        axis.title.y = element_text(size = 14), strip.placement = "bottom")
+p_globalPathwaydnds
+
+```
+
+#### Germ cell expression
+```{r xiaGermExp, fig.height = 6, fig.width=12}
+
+expr_dnds0 <- read_tsv(paste0(inputPublic, "geneSetEnrich.tsv"), col_types = cols()) |> 
+  filter(str_detect(geneGroup, "expr")) |> 
+  mutate(Pathway = str_remove(geneGroup, "expr_")) |> 
+  mutate(Pathway = str_replace_all(Pathway, "_", " ")) |> 
+  mutate(Pathway = str_replace_all(Pathway, "neg", "-")) |> 
+  mutate(Pathway = if_else(Pathway == "-6", "< -6", Pathway)) |> 
+  mutate(Pathway = str_replace_all(Pathway, "over2", "> 2")) |> 
+  mutate(list = if_else(Pathway %in% c("Undiff SSC", "Diff SSC", "Spermatocyte", "Spermatid 1", "Spermatid 2"),  "Spermatogenesis Stage Expr Cluster (Xia et al, 2020)", "Spermatogenesis Expr log2(UMI) (Xia et al, 2020)")) |> 
+  mutate(Pathway = fct_relevel(Pathway, c("Unexp","< -6","-6 to -4","-4 to -2","-2 to 0", "0 to 2", "> 2", "Undiff SSC", "Diff SSC", "Spermatocyte", "Spermatid 1", "Spermatid 2"))) |> 
+  arrange(Pathway) |> 
+  mutate(label = paste0(Pathway, "\n(n=", n_genes, ")")) |> 
+  mutate(list = fct_relevel(list, c("Spermatogenesis Expr log2(UMI) (Xia et al, 2020)" , "Spermatogenesis Stage Expr Cluster (Xia et al, 2020)"))) |> 
+  mutate(label = fct_inorder(label))
+
+# Global dN/dS values 
+p_exprPathwaydnds <- expr_dnds0 |>
+  filter(name == "all") |>
+  ggplot(aes(label, mle, fill = list)) +
+    geom_hline(aes(yintercept = allDatasetVal, linetype = 'All genes exome-wide'), colour = "#f46d43") + 
+  geom_hline(aes(yintercept = 1, linetype = 'Neutral')) +   
+  scale_linetype_manual(name = "limit", values = c(2, 2), 
+                    guide = "none") +
+
+  geom_errorbar(aes(ymin=cilow, ymax=cihigh), colour="black", width=0) +
+  geom_point(position = position_dodge(width = 0.5), col='white', size = 5, pch = 21, stroke = 0.25) +
+  facet_grid(~list, scales = "free_x", space='free',  switch = "both") +
+  scale_y_continuous(expand = c(0,0), limits = c(0.85,1.4)) +
+  scale_fill_manual(values = c("#f46d43", "#59a96a","#e9b872", "#276FBF")) + 
+  ylab("Gene set dN/dS") +
+  theme_pubr() +
+  theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 0.5), axis.title.x = element_blank(),
+        legend.title = element_blank(), legend.text = element_text(size = 14), legend.position = c(0.25,0.7), strip.background = element_blank(), strip.text = element_blank(),
+        axis.title.y = element_text(size = 14), strip.placement = "bottom")
+p_exprPathwaydnds
+```
+
+#### Age groups
+```{r driverMuts, fig.height=6, fig.width=10}
+
+p_globalAge <- ageGroup_dnds |> mutate(type = "Sperm") |> filter(name == "wall") |> 
+  mutate(group = factor(group, levels = rev(c("Older (59-74)", "Middle (43-58)","Younger (26-42)")), ordered = TRUE)) |> 
+  ggplot(aes(group, mle, fill = type)) +
+  geom_errorbar(aes(x = group, ymin = cilow, ymax = cihigh),
+                width = 0, position = position_dodge(width = 0.5))  +
+  geom_hline(aes(yintercept = allDatasetVal, linetype = 'All genes exome-wide'), colour = "#a4161a") + 
+  geom_hline(aes(yintercept = 1, linetype = 'Neutral')) +   
+  scale_linetype_manual(name = "limit", values = c(2, 2), 
+                    guide = guide_legend(override.aes = list(color = c("#a4161a", "black")))) +
+  geom_hline(yintercept = 1, color = "grey40", linetype = "dashed") +
+  geom_point(position = position_dodge(width = 0.5), col='white', size = 5, pch = 21, stroke = 0.25) +
+  scale_fill_manual(values = c("black"), guide = "none") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0.85,1.4)) +
+  # facet_grid(~type, space = "free", scales = "free_x", switch = "both") +
+  ylab("Exome-wide dN/dS") +
+  labs(fill = "Age group") +  # Specify legend title
+  theme_pubr() +
+  theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 0.5), axis.title.x = element_blank(), legend.title = element_blank(), legend.text = element_text(size = 14), legend.position = c(0.25,0.7), strip.background = element_blank(), strip.text = element_blank(), axis.title.y = element_text(size = 14))
+p_globalAge
+
+```
+#### Dataset enrich
+```{r reccurVars, fig.height=5,fig.width=9}
+  
+p_mutRateEnrich <- mutRateEnrich |> 
+  mutate(source = str_replace(source, "DDD", "DD mutation freq")) |> 
+  mutate(source = str_replace(source, "COSMIC", "Cancer mutation freq")) |> 
+  ggplot(aes(reccurGroup, obsExp, label = spermCount, fill = source)) +
+  geom_hline(yintercept = 1, linetype = 'dashed') +   
+  geom_errorbar(aes(ymin=rateLower, ymax=rateUpper), colour="black", width=0) +
+  geom_point(position = position_dodge(width = 0.5), col='white', size = 5, pch = 21, stroke = 0.25) +
+  facet_grid(~source, scales = "free_x", space='free',  switch = "both") +
+  scale_y_continuous(expand = c(0,0), limits = c(0,NA)) +
+  scale_fill_manual(values = c("#276FBF", "black")) + 
+  ylab("Mutation set obs/exp") +
+  theme_pubr() +
+  theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 0.5), axis.title.x = element_blank(),
+        legend.title = element_blank(), legend.text = element_text(size = 14), legend.position = c(0.4,0.8), strip.background = element_blank(), strip.text = element_blank(),
+        axis.title.y = element_text(size = 14), strip.placement = "bottom")
+
+p_mutRateEnrich
+```
+
+##### Plot
+```{r dNdSfig, fig.height=16, fig.width=18}
+# dNdS + gene heatmap
+(p_dndsMuts + labs(tag = "a") + p_dndsRatios + labs(tag = "b") + (mechanism_heatmap + labs(tag = "c") + cancer_heatmap + disease_heatmap + pathway_heatmap + plot_layout(guides = "collect", ncol = 4) & theme(legend.position='right', legend.direction="vertical")) + plot_spacer()+
+  plot_layout(widths = c(100,100,100,1)))/
+  # Global dnds 
+  (free(p_globalAge) + labs(tag = "d") + free(p_exprPathwaydnds) + labs(tag = "e") +  plot_layout(widths = c(1,3), ncol = 2))/
+  # Cancer dnds 
+  (free(p_globalPathwaydnds) + labs(tag = "f") + free(p_mutRateEnrich) + labs(tag = "g") +  plot_layout(widths = c(1.3,1), ncol = 2)) +
+  # heights
+  plot_layout(heights = c(5,2,2)) &
+    theme(plot.tag = element_text(face = 'bold'))
+
+png(paste0(outputPath, 'main/Fig2_dNdS.png'), height=16, width=18, res = 1000, units = "in")
+(p_dndsMuts + labs(tag = "a") + p_dndsRatios + labs(tag = "b") + (mechanism_heatmap + labs(tag = "c") + cancer_heatmap + disease_heatmap + pathway_heatmap + plot_layout(guides = "collect", ncol = 4) & theme(legend.position='right', legend.direction="vertical")) + plot_spacer()+
+  plot_layout(widths = c(100,100,100,1)))/
+  # Global dnds 
+  (free(p_globalAge) + labs(tag = "d") + free(p_exprPathwaydnds) + labs(tag = "e") +  plot_layout(widths = c(1,3), ncol = 2))/
+  # Cancer dnds 
+  (free(p_globalPathwaydnds) + labs(tag = "f") + free(p_mutRateEnrich) + labs(tag = "g") +  plot_layout(widths = c(1.3,1), ncol = 2)) +
+  # heights
+  plot_layout(heights = c(5,2,2)) &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+
+pdf(paste0(outputPath, 'main/Fig2_dNdS.pdf'), height=16, width=18, onefile = F)
+(p_dndsMuts + labs(tag = "a") + p_dndsRatios + labs(tag = "b") + (mechanism_heatmap + labs(tag = "c") + cancer_heatmap + disease_heatmap + pathway_heatmap + plot_layout(guides = "collect", ncol = 4) & theme(legend.position='right', legend.direction="vertical")) + plot_spacer()+
+  plot_layout(widths = c(100,100,100,1)))/
+  # Global dnds 
+  (free(p_globalAge) + labs(tag = "d") + free(p_exprPathwaydnds) + labs(tag = "e") +  plot_layout(widths = c(1,3), ncol = 2))/
+  # Cancer dnds 
+  (free(p_globalPathwaydnds) + labs(tag = "f") + free(p_mutRateEnrich) + labs(tag = "g") +  plot_layout(widths = c(1.3,1), ncol = 2)) +
+  # heights
+  plot_layout(heights = c(5,2,2)) &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+```
+
+## Figure 3
+### Set up
+```{r setup_pathBurden}
+csqColours <- tibble(csq = c("all", "non-coding", "synonymous", "missense", "nonsense+splice", "coding-indel"),
+                     colour = c("#fee090", "gray50", "grey70", "cadetblue", "darkorchid3", "#ed968c"))
+groupLevels <-  c("all", "non-coding", "synonymous", "missense", "nonsense+splice", "indel")
+
+knownPosSelection <- c("PTPN11", "FGFR3", "FGFR2", "HRAS", "RET", "BRAF", "KRAS", "MAP2K1", "MAP2K2", "SOS1", "CBL", "RAF1")
+lofGenes <-  simpleAnnotGenes |> 
+  filter(germlineMechanism == "LOF") |> pull(gene)
+
+indivsExome <- analysisTargVars |> filter(nanoseq == "Exome") |> 
+  distinct(Sample_PD_ID) |> summarize(ageSize = n()) |> pull(ageSize)
+```
+
+### Cell fractions (VAF sums)
+```{r pathBurden}
+# Expected VAF levels for variant groups
+vafSumsExp <- vafSumsExpTarg |> 
+  mutate(vafGroup = str_remove(str_remove(vafGroup, "vepCovered"), "_")) |> 
+  # Rename
+  mutate(vafGroup = str_replace(vafGroup, "MODIFIER", "non-coding")) |> 
+  mutate(vafGroup = str_replace(vafGroup, "HIGH", "LOF_snv")) |> 
+  mutate(vafGroup = str_replace(vafGroup, "Thanatophoricdysplasia", "Thanatophoric dysplasia")) |> 
+  mutate(vafGroup = str_replace(vafGroup, "CrouzonPfeiffer", "Crouzon/Pfeiffer")) |> 
+  # Add indel only expectations
+  bind_rows(vafSumsExpIndel) |> 
+  # Summarize to combine indel + snv combos
+  group_by(Sample_PD_ID, vafGroup) |> summarize(vafSum = sum(vafSum), .groups = "drop") |> 
+  left_join(targetedSamplesFiltered |> select(Sample_PD_ID, age_at_sampling, nanoseq), by = join_by(Sample_PD_ID)) |> 
+  mutate(method = "exp") 
+
+# Observed VAF levels for variant groups
+vafSumsVars <- 
+  # Syn
+  analysisTargVars |> filter(csq == "synonymous" & TYPE == "snv") |> mutate(vafGroup = "synonymous") |> 
+  # Mis
+  bind_rows(analysisTargVars |> filter(csq == "missense" & TYPE == "snv") |> mutate(vafGroup = "missense"))  |> 
+  # Non-coding
+  bind_rows(analysisTargVars |> filter(IMPACT == "MODIFIER" & TYPE == "snv") |> mutate(vafGroup = "non-coding"))  |> 
+  # HIGH
+  bind_rows(analysisTargVars |> filter(IMPACT == "HIGH" & TYPE == "snv") |> mutate(vafGroup = "LOF_snv"))  |> 
+  # ClinVar Pathogenic
+  bind_rows(analysisTargVars |> filter(ClinVar) |> mutate(vafGroup = "Clin")) |> 
+  # Clinvar pathogenic | DDD lof
+  bind_rows(analysisTargVars |> filter((ClinVar | (gene %in% dddLOF & IMPACT == "HIGH"))) |> mutate(vafGroup = "ClinDDlof")) |> 
+  # Clinvar pathogenic | DDD lof | DDD CADD >= 30 & gnomad occurs max once in exome dataset:
+  bind_rows(analysisTargVars |> filter((ClinVar | (gene %in% dddLOF & IMPACT == "HIGH") | (gene %in% dddLOF & cadd >= 30 & gnomAD_AF < 5e-6))) |> mutate(vafGroup = "ClinDDlofCADD")) |> 
+  # ClinVar terms
+  bind_rows(analysisTargVars |> filter(ClinVar & str_detect(PHEN, "RASopathy")) |> mutate(vafGroup = "Rasopathy")) |> 
+  bind_rows(analysisTargVars |> filter(ClinVar & str_detect(PHEN, "Hereditary_cancer-predisposing_syndrome")) |> mutate(vafGroup = "CancerPredisposing")) |> 
+  # Disorders
+  bind_rows(analysisTargVars |> filter(start == 1806119 & str_detect(PHEN, "Achondroplasia") & ClinVar) |>  mutate(vafGroup = "Achondroplasia")) |> 
+  bind_rows(analysisTargVars |> filter(str_detect(PHEN, "oonan")) |> filter(!str_detect(PHEN, "eurofibromatosis") & ClinVar) |> mutate(vafGroup = "Noonan")) |>
+  # Likely drivers
+  bind_rows(analysisTargVars |> mutate(var = paste(chr,start,ref,alt, sep = "_")) |> 
+  filter((gene %in% lofGenes & (IMPACT == "HIGH" | cadd >= 30)) | 
+                                             (var %in% hotspots$var)) |> mutate(vafGroup = "allPos")) |> 
+  #NF1 
+  bind_rows(analysisTargVars |> filter(gene == "NF1") |> filter((ClinVar & str_detect(PHEN, "eurofibromatosis")) | IMPACT == "HIGH" | cadd >= 30) |>
+            mutate(vafGroup = "NF1")) |> 
+  #Apert
+  bind_rows(analysisTargVars |> filter((chr == "10" & start == 123279677 & alt %in% c("C")) | (chr == "10" & start == 123279674 & alt %in% c("C"))) |>
+              mutate(vafGroup = "Apert")) |>
+  #Crouzon
+  bind_rows(analysisTargVars |> filter((str_detect(PHEN, "rouzon") | str_detect(PHEN, "feiffe")) & gene == "FGFR2" & ClinVar) |> mutate(vafGroup = "Crouzon/Pfeiffer")) |> 
+  ##Thanatophoric_dysplasia
+  bind_rows(analysisTargVars |> filter((str_detect(PHEN, "Thanatophoric_dysplasia")) & start!= 1806119 & ClinVar)|> mutate(vafGroup = "Thanatophoric dysplasia")) |> 
+  # Indel coding
+  bind_rows(analysisTargVars |> filter(IMPACT != "MODIFIER" & TYPE != "snv") |> mutate(vafGroup = "coding_indel"))  |> 
+  # Indel non-coding
+  bind_rows(analysisTargVars |> filter(IMPACT == "MODIFIER" & TYPE != "snv") |> mutate(vafGroup = "non-coding_indel"))  |> 
+  # Summarize
+  group_by(Sample_PD_ID, nanoseq, age_at_sampling, vafGroup) |> 
+  summarize(vafSum = sum(DUPLEX_VAF, na.rm = T), countSum = sum(TIMES_CALLED), .groups = "drop") |> 
+  # Fill in any samples that have 0 observed in category
+  complete(nesting(Sample_PD_ID, nanoseq, age_at_sampling), vafGroup, fill = list(countSum=0, vafSum = 0)) |> 
+  mutate(method = "obs") |> 
+  # Add expected vals
+  bind_rows(vafSumsExp) |> 
+  mutate(fill = paste(nanoseq, method)) 
+
+```
+
+
+### Main Plot
+
+#### a) Full cohort summary 
+```{r geneContribB, fig.height=3, fig.width=3}
+
+# Full cohort average of driver and disease cell fractions
+vafSumsPath <- analysisTargVars |> filter(nanoseq == "Exome") |> 
+  filter((ClinVar | (gene %in% dddLOF & IMPACT == "HIGH") | (gene %in% dddLOF & cadd >= 30 & gnomAD_AF < 5e-6))) |> 
+  mutate(sigGene = if_else(gene %in% c(sigGenes$gene_name, knownPosSelection), "driver & disease", "disease")) |> 
+  # Add drivers (not disease)
+  bind_rows(analysisTargVars |> filter(nanoseq == "Exome") |>  mutate(var = paste(chr,start,ref,alt, sep = "_")) |>
+    filter((gene %in% lofGenes & (IMPACT == "HIGH" | cadd >= 30)) |
+                                               (var %in% hotspots$var)) |>
+    # Exlude disease causing
+    filter(!(ClinVar | (gene %in% dddLOF & IMPACT == "HIGH") | (gene %in% dddLOF & cadd >= 30 & gnomAD_AF < 5e-6))) |> mutate(sigGene = "driver")) |> 
+  # Summarize
+  group_by(sigGene) |> 
+  summarize(vafSum = sum(DUPLEX_VAF), .groups = "drop") |> 
+  mutate(vafSum = vafSum/indivsExome) 
+
+# Expected vs Obs disease
+vafSumsExp <- vafSumsVars |> filter(nanoseq == "Exome" & vafGroup == "ClinDDlofCADD") |> 
+  group_by(method) |> 
+  summarize(vafSum = mean(vafSum))
+  
+vafSumsSummary <- vafSumsPath |> filter(sigGene != "disease") |> mutate(ageGroup = "drivers") |> 
+  bind_rows(vafSumsPath |> filter(sigGene == "driver & disease") |> mutate(ageGroup = "disease")) |> 
+  bind_rows(tibble(sigGene = "disease expected", ageGroup = "disease", vafSum = vafSumsExp$vafSum[1])) |> 
+  bind_rows(tibble(sigGene = "disease unexplained", ageGroup = "disease", vafSum = (vafSumsPath$vafSum[1]- vafSumsExp$vafSum[1]))) |> 
+  mutate(sigGene = factor(sigGene, levels = c("driver", "driver & disease",  "disease unexplained", "disease expected")))
+
+p_vafSumsPath <- vafSumsSummary |> 
+  ggplot(aes(x = ageGroup, y = vafSum)) +
+  geom_bar(aes(fill = sigGene), position="stack", stat="identity", colour = "black") + 
+  scale_fill_manual(values = c("#bebada", "lightblue", "grey80", "grey30")) +
+  scale_y_continuous(labels = scales::percent, limits = c(0,0.06)) +
+  ylab("% of sperm with disease/driver mutation") +
+  xlab("Cohort mean") +
+  theme_pubr() +
+  theme(
+        legend.text=element_text(size=12),
+        legend.position = c(0.5,0.85),
+        legend.title = element_blank())
+p_vafSumsPath
+```
+
+#### b) Selection VAF
+```{r geneContribC, fig.height=3, fig.width=8}
+
+p_vafSumsGenesPosEx <- vafSumsVars |> filter(nanoseq == "Exome" & vafGroup == "allPos") |> 
+  ggplot(aes(x = age_at_sampling, y = vafSum, colour = nanoseq)) +
+  geom_point(size = 2) +
+  stat_smooth(method = "glm", formula = 'y ~ x', method.args = list(family = "quasibinomial"), 
+              se = TRUE, level = 0.95, color = "#759fbc", fill = "#759fbcA0") +  # Adjust color and fill
+  xlim(NA, 75) +
+  scale_colour_manual(values = "#759fbc") +  # Use the same line color
+  scale_y_continuous(labels = scales::percent, limits = c(0, 0.065)) +
+  ylab("% of sperm with known driver") +
+  xlab('Age (years)') +
+  theme_pubr() +
+  theme(legend.position = "none", strip.background = element_blank())
+
+p_vafSumsGenesPosEx
+
+fit <- glm(vafSum ~ age_at_sampling, family = quasibinomial, data = vafSumsVars |> filter(nanoseq == "Exome" & vafGroup == "allPos"))
+summary(fit)
+# Get the predicted values (on the logit scale) and the standard errors
+preds <- predict(fit, data.frame(age_at_sampling = c(30, 70)), type = "link", se.fit = TRUE)
+predicted_vals <- preds$fit
+
+# Calculate the 95% confidence intervals on the logit scale
+lower_ci <- predicted_vals - 1.96 * preds$se.fit
+upper_ci <- predicted_vals + 1.96 * preds$se.fit
+
+predsDriverRate <- tibble(
+  Age = c(30, 70),
+  Predicted_VAF = plogis(predicted_vals),
+  Lower_CI = plogis(lower_ci),
+  Upper_CI = plogis(upper_ci))
+
+
+```
+
+
+#### c) Disease VAF
+```{r paperPlot, fig.height=6, fig.width=10}
+
+pVafSumFiltPathEx <- vafSumsVars |> 
+  filter(nanoseq == "Exome" & vafGroup %in% c("ClinDDlofCADD"))  |> 
+  mutate(fill = factor(if_else(fill == "Exome obs", "Observed", "Expected"), levels = c("Observed", "Expected"))) |> 
+  ggplot(aes(x = age_at_sampling, y = vafSum, colour = fill, fill = fill)) +
+  geom_point(size = 2, aes(alpha = fill)) +  # Set alpha based on fill
+  scale_y_continuous(labels = scales::percent, limits = c(0, 0.065)) +
+  ylab("% of sperm with likely disease mutation") +
+  xlab('Age (years)') +
+  scale_colour_manual(values = c("Observed" = "#A91F36", "Expected" = "grey30")) +
+  scale_fill_manual(values = c("Observed" = "#DA7184A0", "Expected" = "#B0B0B0A0")) + 
+  scale_alpha_manual(values = c("Observed" = 1, "Expected" = 0.3)) +  # Adjust alpha levels
+  stat_smooth(method = "glm", formula = 'y ~ x', method.args = list(family = "quasibinomial"), se = TRUE, level = 0.95) +  # Quasibinomial regression with 95% CI
+  # stat_smooth(method = "lm", formula = 'y ~ x', se = TRUE, level = 0.95) +  # Quasibinomial regression with 95% CI
+  theme_pubr() +
+  theme(strip.background = element_blank(),
+        legend.title = element_blank(),
+        legend.position = c(0.2, 0.85),
+        plot.title = element_text(hjust = 0.5, size = 10))
+
+pVafSumFiltPathEx
+
+```
+##### Enrich stats
+```{r enrich}
+# Fit the quasibinomial model for the 'Observed' and 'Expected' data separately
+data_vafSumsVars <- vafSumsVars |> 
+  filter(nanoseq == "Exome" & vafGroup %in% c("ClinDDlofCADD"))  
+
+model_observed <- glm(vafSum ~ age_at_sampling, family = quasibinomial, 
+                      data = filter(data_vafSumsVars, fill == "Exome obs"))
+model_expected <- glm(vafSum ~ age_at_sampling, family = quasibinomial, 
+                      data = filter(data_vafSumsVars, fill == "Exome exp"))
+
+# Function to get predictions and confidence intervals for a specific age
+get_predictions <- function(model, new_data) {
+  preds <- predict(model, newdata = new_data, se.fit = TRUE)
+  fit <- preds$fit
+  se_fit <- preds$se.fit
+  
+  # Convert log-odds back to probabilities (inverse logit)
+  prob <- plogis(fit)
+  lower <- plogis(fit - 1.96 * se_fit)
+  upper <- plogis(fit + 1.96 * se_fit)
+  
+  return(data.frame(prob = prob, lower = lower, upper = upper))
+}
+
+
+age_range <- data.frame(age_at_sampling = c(30, 40, 50, 60, 70))
+
+# Get predictions
+obs_preds <- get_predictions(model_observed, age_range)
+exp_preds <- get_predictions(model_expected, age_range)
+
+# Calculate fold enrichment (Observed / Expected) for each age group
+fold_enrichment <- obs_preds$prob / exp_preds$prob
+fold_lower <- obs_preds$lower / exp_preds$upper
+fold_upper <- obs_preds$upper / exp_preds$lower
+
+# Create a data frame to store results
+enrich_vafSumsVars <- tibble(
+  Age = age_range$age_at_sampling,
+  Observed = obs_preds$prob,
+  Obs_Lower_CI = obs_preds$lower,
+  Obs_Upper_CI = obs_preds$upper,
+  Expected = exp_preds$prob,
+  Fold_Enrichment = fold_enrichment,
+  Fold_Lower_CI = fold_lower,
+  Fold_Upper_CI = fold_upper)
+
+```
+
+#### d) Per gene
+```{r geneContribC, fig.height=3, fig.width=18}
+vafSumsPathGeneEx <- analysisTargVars |> filter(str_detect(target, "exome")) |> 
+  filter((ClinVar | (gene %in% dddLOF & IMPACT == "HIGH") | (gene %in% dddLOF & cadd >= 30 & gnomAD_AF < 5e-6))) |> 
+  mutate(disease = "disease") |> 
+  bind_rows(analysisTargVars |> filter(nanoseq == "Exome") |>  mutate(var = paste(chr,start,ref,alt, sep = "_")) |> 
+    filter((gene %in% lofGenes & (IMPACT == "HIGH" | cadd >= 30)) | 
+                                               (var %in% hotspots$var)) |> 
+    # Exlude disease causing
+    filter(!(ClinVar | (gene %in% dddLOF & IMPACT == "HIGH") | (gene %in% dddLOF & cadd >= 30 & gnomAD_AF < 5e-6))) |> 
+      mutate(disease = "no")) |> 
+  # Summarize
+  group_by(gene, disease) |> 
+  summarize(vafSum = sum(DUPLEX_VAF, na.rm = T), countSum = n(), .groups = "drop") 
+
+percVafObj <- vafSumsPathGeneEx  |> 
+  mutate(gene = if_else(countSum < 5, "other", gene)) |> 
+  mutate(disease = if_else(gene == "other", "disease", disease)) |> 
+  group_by(disease, gene) |> summarize(vafPercentage = sum(vafSum), countSum  = sum(countSum), geneCount = n(), .groups = "drop") |> 
+  mutate(vafPercentage= vafPercentage/indivsExome) |> 
+  mutate(group = "all") |> 
+  mutate(fills = if_else(gene %in% c(sigGenes$gene_name, knownPosSelection), "lightblue", "grey80")) |> 
+  mutate(fills = if_else(disease == "no", "#bebada", fills)) |>
+  mutate(fills = if_else(gene == "other", "white", fills)) |>
+  mutate(sigGene = if_else(gene %in% c(sigGenes$gene_name, knownPosSelection), "germline selection & disease", "other genes")) |> 
+  mutate(sigGene = if_else(disease == "no", "selection not disease", sigGene)) |> 
+  mutate(group2 = if_else(gene == "other", "other", "gene")) |> 
+  arrange(group2, -vafPercentage) |>
+  mutate(vafLabel = if_else(round(vafPercentage, 5) >= 0.0007, paste0(round(vafPercentage, 4) * 100, "%"),"")) |> 
+  # mutate(gene = paste0(gene, " (", vafLabel, ")")) |> 
+  mutate(gene = fct_inorder(gene)) 
+  
+
+labelOther <- c(paste0(percVafObj |> filter(group2 == "other") |> pull(geneCount), " genes with\n1-4 mutations"), percVafObj |> filter(group2 == "other") |> pull(vafLabel))
+
+p_percVafObj <- percVafObj |> 
+  ggplot(aes(x = group, y = vafPercentage)) +
+  geom_bar(aes(fill = gene), position = "stack", stat = "identity", colour = "black", show.legend = FALSE) + 
+  scale_fill_manual(values = c(percVafObj$fills), guide = "none") +
+  geom_text(aes(group = gene, label = gene), position = position_stack(vjust = 0.5), angle = 270) +
+  geom_text(aes(x = 1.55, group = gene, label = vafLabel), position = position_stack(vjust = 0.5)) +
+  # 
+  scale_y_continuous(breaks = c(0,0.025,0.03,0.035,0.04), labels = c("0%", "2.5%", "3%","3.5%","4%")) +
+  ylab("per gene contribution to disease/driver mutations") + 
+  coord_flip(clip = "off") +
+  theme_pubr() +
+  annotate("text", x = "all", y = 0.003, label = paste0(labelOther[1], "\n(", labelOther[2], ")")) +
+  # Line for low %
+  annotate("text", x = 1.55, y = 0.026, label = "0.01% - 0.05%") +
+  annotate("segment", x = 1.5, y = 0.02265, yend = 0.03035, colour = "grey20") +
+  annotate("segment", x = 1.48, y = 0.02265, xend = 1.52, colour = "grey20") +
+  annotate("segment", x = 1.48, y = 0.03035, xend = 1.52, colour = "grey20") +
+  # Scale break
+  scale_y_break(c(0.005, 0.023), scales = 10) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "none",
+    axis.text.x.top = element_blank(),
+    axis.ticks.x.top = element_blank(),
+    axis.line.x.top = element_blank(),
+    axis.text.y = element_blank(),
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title.y = element_blank()
+  ) 
+
+p_percVafObj
+```
+
+##### Plot
+```{r geneContribC, fig.height=10, fig.width=16}
+
+((p_vafSumsPath + labs(tag = "a") + plot_spacer() + 
+   ((p_vafSumsGenesPosEx + labs(tag = "b"))/(pVafSumFiltPathEx + labs(tag = "c") ))) + plot_spacer() + plot_layout(widths = c(1,0.5,2.5,0.05))) /
+  free(p_percVafObj + labs(tag = "d") + plot_spacer() + plot_layout(widths = c(100,1))) + 
+  plot_layout(heights = c(2,1)) &
+    theme(plot.tag = element_text(face = 'bold'))
+
+png(paste0(outputPath, 'main/Fig3_disease.png'), height = 10, width = 16, res = 1000, units = "in")
+((p_vafSumsPath + labs(tag = "a") + plot_spacer() + 
+   ((p_vafSumsGenesPosEx + labs(tag = "b"))/(pVafSumFiltPathEx + labs(tag = "c") ))) + plot_spacer() + plot_layout(widths = c(1,0.5,2.5,0.05))) /
+  free(p_percVafObj + labs(tag = "d") + plot_spacer() + plot_layout(widths = c(100,1))) + 
+  plot_layout(heights = c(2,1)) &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+
+pdf(paste0(outputPath, 'main/Fig3_disease.pdf'), height = 10, width = 16, onefile = F)
+((p_vafSumsPath + labs(tag = "a") + plot_spacer() + 
+   ((p_vafSumsGenesPosEx + labs(tag = "b"))/(pVafSumFiltPathEx + labs(tag = "c") ))) + plot_spacer() + plot_layout(widths = c(1,0.5,2.5,0.05))) /
+  free(p_percVafObj + labs(tag = "d") + plot_spacer() + plot_layout(widths = c(100,1))) + 
+  plot_layout(heights = c(2,1)) &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+
+```
+
+## Figure 4
+#### Germline compare
+```{r driverMuts, fig.height=6, fig.width=10}
+
+external_global_dNdS0 <- external_global_dNdS |> 
+  mutate(type = if_else(str_detect(group,"AF"), "Germline population variants", "Somatic")) |> 
+  mutate(type = if_else(group %in% c("controlDNMs", "dddmuts"), "De novo mutations (DNMs)", type)) |> 
+  filter(type != "Somatic") |> 
+  mutate(group = str_remove(group, "Formatted")) |>
+  mutate(group = if_else(group == "controlDNMs", "Control\nDNMs", group)) |> 
+  mutate(group = if_else(group == "dddmuts", "Devel disorder\nDNMs", group)) |> 
+  mutate(group = if_else(group == "AF_1e-6_to_1e-5", "AF in\n(1e-6-1e-5]", group)) |> 
+  mutate(group = if_else(group == "AF_1e-5_to_1e-4", "AF in\n(1e-5-0.0001]", group)) |> 
+  mutate(group = if_else(group == "AF_1e-4_to_1e-3", "AF in\n(0.0001-0.001]", group)) |> 
+  mutate(group = if_else(group == "AF_1e-3_to_1e-2", "AF in\n(0.001-0.01]", group)) |> 
+  mutate(group = if_else(group == "AF_1e-2_to_1e-1", "AF in\n(0.01-0.1]", group)) |> 
+  mutate(group = if_else(group == "AF_1e-1_to_1", "AF in\n(0.1-1]", group)) |> 
+  mutate(group = if_else(group == "AF_1", "Singletons", group)) |> 
+  mutate(group = if_else(group == "AF_2", "Doubletons", group)) |> 
+  mutate(name = str_replace(name, "truncating", "nonsense+splice")) |> 
+  mutate(group = factor(group, levels = c("AF in\n(0.1-1]", "AF in\n(0.01-0.1]", "AF in\n(0.001-0.01]", "AF in\n(0.0001-0.001]", "AF in\n(1e-5-0.0001]", "AF in\n(1e-6-1e-5]", "Doubletons", "Singletons", "Exome NanoSeq", "Control\nDNMs", "Devel disorder\nDNMs"), ordered = TRUE)) |> 
+  filter(geneGroup == "Exome")
+
+p_globalComp <-  compGlobal_dNdS |> filter(test == "BasePairCov + CpGmeth + Penta" & name == "all") |> 
+  mutate(type = "Sperm") |> mutate(group = "Full cohort") |> 
+  bind_rows(external_global_dNdS0 |> filter(type != "Sperm" & geneGroup == "Exome" & name %in% c("all"))) |> 
+  mutate(type = factor(type, levels = c("Sperm", "De novo mutations (DNMs)", "Germline population variants"))) |> 
+    mutate(group = factor(group, levels = rev(c("AF in\n(0.1-1]", "AF in\n(0.01-0.1]", "AF in\n(0.001-0.01]", "AF in\n(0.0001-0.001]", "AF in\n(1e-5-0.0001]", "AF in\n(1e-6-1e-5]", "Doubletons", "Singletons",  "Devel disorder\nDNMs", "Control\nDNMs", "Full cohort")), ordered = TRUE)) |> 
+  ggplot(aes(group, mle, fill = type)) +
+  geom_errorbar(aes(x = group, ymin = cilow, ymax = cihigh),
+                width = 0, position = position_dodge(width = 0.5))  +
+  geom_hline(yintercept = 1, color = "grey40", linetype = "dashed") +
+  geom_point(position = position_dodge(width = 0.5), col='white', size = 5, pch = 21, stroke = 0.25) +
+  scale_fill_manual(values = c("#f46d43", "#a7bed3", "#9e643c")) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0,1.5)) +
+  facet_grid(~type, space = "free", scales = "free_x", switch = "both") +
+  ylab("Exome-wide dN/dS") +
+  labs(fill = "Age group") +  # Specify legend title
+  theme_pubr() +
+  theme(axis.text.x = element_text(size = 12, angle = 45, vjust = 0.5), axis.title.x = element_blank(), legend.title = element_blank(), legend.text = element_text(size = 14), legend.position = c(0.3,0.4), strip.background = element_blank(), strip.text = element_blank(), axis.title.y = element_text(size = 14))
+p_globalComp
+
+```
+
+### LOF Constraint
+#### Z-score
+```{r gnomadConstrain, fig.height=4,fig.width=10}
+
+p_gnomadConstraintZ <- ggplot(gnomadConstraintAllGenes, aes(x = lof_z, y = wlof, fill = geneCat, alpha = geneCat, label = labelGene, colour = geneCat)) +
+  geom_vline(xintercept = 0, color = "grey40", linetype = "dashed") +
+  geom_point(size = 3, pch = 21, col = 'white', stroke = 0.25) +
+  scale_colour_manual(values = c("black","cadetblue")) +
+  scale_fill_manual(values = c("black","cadetblue")) +
+  scale_alpha_manual(values = c( 0.3,1)) +
+  geom_point(data = gnomadConstraintAllGenes |> filter(geneCat == "Sperm LOF selection gene (n=32)"), size = 3, pch = 21, col = 'white', stroke = 0.25) +
+  geom_text_repel(colour = "black", force = 2, show.legend = FALSE) +
+  annotate("label", x = -3, y = 125, label = "LOF Excess") +
+  annotate("label", x = 3.3, y = 125, label = "LOF Depletion") +
+  annotate("segment", x = -5, xend = -7, y = 125, yend = 125, arrow = arrow(length = unit(0.2, "cm"), ends = "last")) +
+  annotate("segment", x = 5.6, xend = 7.6, y = 125, yend = 125, arrow = arrow(length = unit(0.2, "cm"), ends = "last")) +
+  theme_pubr() + 
+  xlab("gnomADv2 LOF Z-score") +
+  ylab("Sperm LOF obs/exp") + 
+  theme(legend.position = c(0.8, 0.5), legend.title = element_blank(), legend.text = element_text(size = 14))
+p_gnomadConstraintZ 
+
+```
+
+##### Plot
+```{r dNdSfig, fig.height=8, fig.width=10}
+
+p_globalComp/p_gnomadConstraintZ + plot_annotation(tag_levels = 'a') &
+    theme(plot.tag = element_text(face = 'bold'))
+
+png(paste0(outputPath, 'main/Fig4_PopVars.png'), height=8, width=10, res = 300, units = "in")
+p_globalComp/p_gnomadConstraintZ + plot_annotation(tag_levels = 'a') &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+
+pdf(paste0(outputPath, 'main/Fig4_PopVars.pdf'), height=8, width=10, onefile = F)
+p_globalComp/p_gnomadConstraintZ + plot_annotation(tag_levels = 'a') &
+    theme(plot.tag = element_text(face = 'bold'))
+dev.off()
+
+```
 
 # Extended Figures
 ## Ext Fig 1
@@ -1007,7 +1796,7 @@ p_ratioBurdenSigs
 
 ```
 
-###Plot
+### Plot
 ```{r effPlots,fig.height=12, fig.width=14}
 
 (bloodEff_comp  + bloodEff_ind_comp) / (pSperm1v5 + pBlood1v5 + p_ratioBurdenSigs + plot_layout(widths = c(2,2,1))) + 
@@ -1026,4 +1815,308 @@ pdf(paste0(outputPath, 'extended/FigExt3_BloodComp.pdf'), height=12, width=15, o
 dev.off()
 ```
 
+## Ext Fig 4
+### Compare global
+```{r dndsGlobalComp}
+p_compGlobal_dNdS <- compGlobal_dNdS |> 
+  filter(name != "tru") |> 
+  mutate(test = fct_inorder(test)) |> 
+  ggplot(aes(x = name, y = mle, colour = test)) +
+  geom_pointrange(aes(ymin = cilow, ymax = cihigh), position=position_dodge(width = 0.5)) +
+  geom_hline(yintercept = 1, linetype = "dashed") + 
+  scale_colour_discrete(name = "dNdScv model") +
+  ylab("Global dN/dS") + xlab("Mutation class") +
+  theme_pubr() +
+  theme(legend.position = c(0.3, 0.8), legend.text = element_text(size = 10), legend.title = element_text(size = 12), axis.title.x = element_blank())
 
+p_compGlobal_dNdS
+```
+
+### Compare sig genes
+```{r dndsGlobalComp, fig.height = 7, fig.width=4}
+basic_ranked_genes <- sig_dndsAll |> pull(gene_name)
+p_compGene_dNdScomb <- compGene_dNdScomb |> 
+  mutate(Significant = str_replace(Significant, "Restrictedhypothesis", "Restricted\nhypothesis")) |> 
+  mutate(gene_name = factor(gene_name, levels = rev(basic_ranked_genes))) |> 
+  ggplot(aes(x = test, y = gene_name, fill = Significant)) +
+  geom_tile(color = "white") +
+  scale_fill_manual(values = c("Exome-wide" = "#74a9cf", "Restricted\nhypothesis" = "#fd8d3c", "NS" = "grey")) + # Customize colors
+  labs(x = "Test Type", y = "Gene", fill = "Significance") +
+  theme_pubr() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9), axis.text.y = element_text(size = 9), legend.position = "right",
+        legend.text = element_text(size = 8), legend.title = element_text(size = 12),axis.title.x = element_blank())
+p_compGene_dNdScomb
+
+```
+
+### Methylation
+```{r dndsGlobalComp}
+
+# Create the tibble with mean methylation levels
+methLevel <- tibble(Consequence = c("synonymous", "missense", "nonsense", "splice"),
+                    Mean_meth = c(0.648, 0.696, 0.721, 0.770),
+                    Mean_duplex_cov = c(21008, 20900, 21108, 14340)) |> 
+  mutate(Consequence = factor(Consequence, levels = c("synonymous", "missense", "nonsense", "splice")),
+         Mean_meth = Mean_meth * 100)  # Convert to percentage
+# Define the colors for each mutation type
+mutType_colours <- c("synonymous" = "grey70",
+                     "missense" = "cadetblue",
+                     "nonsense" = "darkorchid4",
+                     "splice" = "darkorchid2")
+
+# Create the plot with percentage scale
+p_methLevel <- ggplot(methLevel, aes(x = Consequence, y = Mean_meth, fill = Consequence)) +
+  geom_col() +
+  scale_fill_manual(values = mutType_colours) + # Map colors to the bars
+  scale_y_continuous(labels = scales::percent_format(scale = 1), limits = c(0,100), expand = c(0,0)) + 
+  labs(y = "Mean methylation (%)") +  # Add label for y-axis
+  theme_pubr() +
+  theme(axis.title.x = element_blank(),  # Remove x-axis title
+        axis.text.x = element_blank(), legend.position = "none",axis.ticks.x = element_blank(),
+         axis.line.x = element_blank())   # Remove x-axis text
+p_methLevel
+# Create the plot with percentage scale
+p_covLevel <- ggplot(methLevel, aes(x = Consequence, y = Mean_duplex_cov, fill = Consequence)) +
+  geom_col() +
+  scale_fill_manual(values = mutType_colours) + # Map colors to the bars
+  scale_y_continuous(expand = c(0,0)) + 
+  labs(y = "Mean duplex coverage") +  # Add label for y-axis
+  theme_pubr() +
+  theme(axis.title.x = element_blank(),  # Remove x-axis title
+        axis.text.x = element_blank(), legend.position = "right",axis.ticks.x = element_blank(),
+         axis.line.x = element_blank())   # Remove x-axis text
+p_covLevel
+
+tri <- mutRatesTriPenta |> select(tri, meth, triRate, tricilow, tricihigh) |> distinct()
+methContexts <- tri |> filter(meth == "High") |> pull(tri)
+methRates <- tri |> filter(tri %in% methContexts) |> 
+  mutate(`Tri CpG>T Mut` = paste0(str_sub(tri,1,1), "[", str_sub(tri,2,2), ">", str_sub(tri,6,6), "]", str_sub(tri,3,3))) |> 
+  mutate(methBin = str_replace(meth, "Low", "Low (0-10%)")) |> 
+  mutate(methBin = str_replace(methBin, "Mid", "Mid (10-40% or unknown)")) |> 
+  mutate(methBin = str_replace(methBin, "High", "High (40-100%)")) |> 
+  mutate(`Tri CpG>T Mut` = fct_reorder(`Tri CpG>T Mut`, triRate)) 
+  
+p_methMutRate <- methRates |> 
+  mutate(methBin = factor(methBin, levels = c("Low (0-10%)", "Mid (10-40% or unknown)", "High (40-100%)"))) |>
+  ggplot(aes(x = methBin, y = triRate, ymin = tricilow, ymax = tricihigh, colour = `Tri CpG>T Mut`)) +
+  geom_pointrange(position = position_dodge(0.5)) + 
+  ylab("CpG>T mutation rate") +
+  xlab("Methylation decile") +
+  ylim(0, NA) +
+  theme_pubr() + 
+  theme(legend.position = "right", axis.text.x = element_text(size = 9))
+
+p_methMutRate
+
+```
+
+##### Plot
+```{r dndsGlobalComp, fig.height = 11, fig.width=13}
+layout <- "
+AACCC
+BBCCC
+DDDEE
+DDDEE
+DDDEE"
+p_covLevel + p_methLevel + p_methMutRate +  p_compGlobal_dNdS + p_compGene_dNdScomb + plot_layout(design = layout) + plot_annotation(tag_levels = "a") &
+    theme(plot.tag = element_text(face = 'bold')) 
+
+png(paste0(outputPath, 'extended/FigExt4_dndsModel.png'), height=11, width=13, res=300, units = "in")
+p_covLevel + p_methLevel + p_methMutRate +  p_compGlobal_dNdS + p_compGene_dNdScomb + plot_layout(design = layout) + plot_annotation(tag_levels = "a") &
+    theme(plot.tag = element_text(face = 'bold')) 
+dev.off()
+pdf(paste0(outputPath, 'extended/FigExt4_dndsModel.pdf'), height=11, width=13, onefile = F)
+p_covLevel + p_methLevel + p_methMutRate +  p_compGlobal_dNdS + p_compGene_dNdScomb + plot_layout(design = layout) + plot_annotation(tag_levels = "a") &
+    theme(plot.tag = element_text(face = 'bold')) 
+dev.off()
+```
+
+## Ext Fig 5
+```{r heatmap, fig.height=10, fig.width=6}
+mechanism_heatmapFull <- simpleAnnotGenes |>
+  mutate(germlineMechanism = if_else(gene %in% c("PPM1D", "CBL"), "Activating", germlineMechanism)) |> 
+  mutate(germlineMechanism = str_replace(germlineMechanism, "Missense Only", "Activating")) |> 
+  select(gene, `Sperm\nselection` = germlineMechanism, `Devel.\ndisorder` = DD_Mechanism, Cancer =cancerMechanism) |> 
+  
+  pivot_longer(cols = c(`Sperm\nselection`, `Devel.\ndisorder`, Cancer)) |> 
+  left_join(dndsPlotObj |> rename(gene = gene_name) |> select(gene, testSig, totMuts), by = join_by(gene))|> 
+  mutate(gene = fct_reorder(gene, totMuts, .desc = T)) |> 
+  
+  mutate(value = factor(value, levels = c("Activating", "LOF", "Fusion Only", "Not in list"), ordered = TRUE)) |>
+  mutate(name = factor(name, levels = c("Sperm\nselection", "Devel.\ndisorder", "Cancer"), ordered = TRUE)) |>
+  ggplot(aes(y = name, x = gene, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_manual(values = c("cadetblue","darkorchid3","#9d5c63", "grey"), name = "Sperm Enrichment/\nDD Mechanism/\nCancer Mechanism") +  # Customize the colors
+  ggforce::facet_col(vars(testSig), scales = "free_y", space = "free") +
+  scale_y_discrete(expand = c(0,0)) +
+  coord_flip() +
+  ylab("Mutation Mechanism") + 
+  theme_pubr() +
+  theme(axis.title.y = element_blank(), strip.placement = "outside", legend.title=element_blank(),
+        legend.position="bottom", strip.background = element_blank(), strip.text = element_blank(), axis.ticks.y = element_blank()) 
+
+mechanism_heatmapFull
+png(paste0(outputPath, 'extended/FigExt5_mechanism_heatmap.png'), height=10, width=4, res = 300, units = "in")
+mechanism_heatmapFull
+dev.off()
+pdf(paste0(outputPath, 'extended/FigExt5_mechanism_heatmap.pdf'), height=10, width=4, onefile = F)
+mechanism_heatmapFull
+dev.off()
+```
+
+## Ext Fig 6
+```{r cats, fig.width=14, fig.height = 4}
+
+pVafSumModelEx <- vafSumsVars |> 
+  filter(nanoseq == "Exome") |> 
+  filter(vafGroup %in% c("non-coding", "synonymous", "missense", "LOF_snv", "non-coding_indel", "coding_indel")) |> 
+  mutate(vafGroup = fct_relevel(vafGroup, c("non-coding", "synonymous", "missense", "LOF_snv", "non-coding_indel", "coding_indel")),
+         fill = factor(if_else(method == "obs", "Observed", "Expected"), levels = c("Observed", "Expected"))) |> 
+  ggplot(aes(x = age_at_sampling, y = vafSum, colour = fill, fill = fill)) +
+  geom_point(size = 2, aes(alpha = fill)) +  # Adjust point size and alpha
+  scale_y_continuous(limits = c(0, NA)) +  # Adjust y-axis to allow values > 1
+  ylab("Mean count per sperm cell") +
+  xlab('Age (years)') +
+  scale_colour_manual(values = c("Observed" = "#A91F36", "Expected" = "grey30")) +  # Same color scheme
+  scale_fill_manual(values = c("Observed" = "#DA7184A0", "Expected" = "#B0B0B0A0")) + 
+  scale_alpha_manual(values = c("Observed" = 1, "Expected" = 0.3)) +  # Adjust alpha levels
+  stat_smooth(method = "lm", formula = 'y ~ x', se = TRUE, level = 0.95) +  # Use quasipoisson model
+  facet_wrap(~vafGroup, scales = "free_y", ncol = 6) +  # Keep faceting with free y-scales
+  theme_pubr() +
+  theme(strip.background = element_blank(),
+        legend.title = element_blank(),
+        legend.position = "right")  # Adjust legend position
+
+pVafSumModelEx 
+png(paste0(outputPath, "extended/FigExt6_MeanCount.png"), height = 4, width = 15, res = 300, units = "in")
+pVafSumModelEx 
+dev.off()
+pdf(paste0(outputPath, "extended/FigExt6_MeanCount.pdf"), height = 4, width = 15, onefile = F)
+pVafSumModelEx 
+dev.off()
+
+```
+
+## Ext Fig 7
+### Phenotype objects
+```{r phenCorr,fig.height=7, fig.width=9}
+sig1and5 <- sigsHDP |> 
+  left_join(burdenSummary |> select(burden, PD_ID, indiv_ID), by = "PD_ID") |> 
+  # Haploid for sperm, diploid for blood
+  mutate(mutsPerGenome = if_else(tissue == "Sperm", round(burden * 2582336232), round(burden * 2582336232 * 2))) |> 
+  mutate(across(c(SBS1, SBS5, SBS19),  ~ round(.x* mutsPerGenome)))
+
+rePhenos <- burdenSummary |>  
+  left_join(sig1and5 |> select(-burden)) 
+  
+phenMatrix <- targetedSamplesFiltered |> 
+  # Add burden and signatu
+  left_join(burdenTargeted |> select(burden, indelBurden, Sample_PD_ID), by = join_by(Sample_PD_ID)) |> 
+  # Add vaf sums
+  left_join(vafSumsVars |> filter(vafGroup == "ClinDDlofCADD" & method == "obs") |> select(Sample_PD_ID, pathSpermFraction = vafSum),by = join_by(Sample_PD_ID)) |>
+  left_join(vafSumsGenesPos |> select(Sample_PD_ID, posGeneSpermFraction = vafSum),by = join_by(Sample_PD_ID)) 
+```
+
+### Phenotype correlation
+```{r phenCorr,fig.height=7, fig.width=5}
+
+# Define a function to fit model and extract p-values
+fit_model_and_get_pvalues <- function(outcome, predVars, data) {
+  outDF <- tibble()
+  
+  # Combine all predictor variables into a single string
+  predictors <- paste("age_at_sampling", paste(predVars, collapse = " + "), sep = " + ")
+  
+  # Test each outcome with all predictors
+  for (var in outcome) {
+    model_formula <- as.formula(paste(var, "~", predictors))
+    model <- glm(model_formula, data = data, family = "gaussian")
+    
+    # Extract p-values and effect sizes for all predictors
+    p_vals <- summary(model)$coefficients[, "Pr(>|t|)"]
+    effSize <- coef(model)
+    
+    # Create a tibble for all predictors
+    addDF <- tibble(
+      variables = names(effSize)[-1],
+      model = var,
+      effectSize = effSize[-1],
+      pVal = p_vals[-1]
+    )
+    
+    # Combine with the overall results
+    outDF <- outDF |> bind_rows(addDF)
+  }
+  return(outDF)
+}
+
+# Define your predictors
+predVars <- c("BMI", "pack_years", "drinkYears")
+predVarsBlood <- c("BMI", "pack_years", "drinkYears")
+# Define your outcomes and groups
+outcomesTargeted <- c("burden", "indelBurden", "pathSpermFraction", "posGeneSpermFraction")
+
+outcomesExome <- c("burden", "indelBurden", "pathSpermFraction", "posGeneSpermFraction")
+
+outcomesREblood <- c("burden", "indelBurden", "SBS1", "SBS5", "SBS19")
+outcomesREsperm <- c("burden", "indelBurden", "SBS1", "SBS5")
+
+# Fit the models and extract p-values
+targPhenPvals <- fit_model_and_get_pvalues(outcomesTargeted, predVars, subset(phenMatrix, nanoseq == "Targeted"))
+exomePhenPvals <- fit_model_and_get_pvalues(outcomesExome, predVars, subset(phenMatrix, nanoseq == "Exome"))
+spermREPhenPvals <- fit_model_and_get_pvalues(outcomesREsperm, predVars, subset(rePhenos, tissue == "Sperm")) 
+bloodREPhenPvals <- fit_model_and_get_pvalues(outcomesREblood, predVarsBlood, subset(rePhenos, tissue == "Blood"))
+
+phenosFormatted <- targPhenPvals |> mutate(nanoseq = "Sperm target panel") |> 
+  bind_rows(exomePhenPvals |> mutate(nanoseq = "Sperm exome")) |> 
+  bind_rows(spermREPhenPvals |> mutate(nanoseq = "Sperm genome")) |> 
+  bind_rows(bloodREPhenPvals |> mutate(nanoseq = "Blood genome")) |> 
+  mutate(nanoseq = fct_relevel(nanoseq, "Sperm target panel", "Sperm exome", "Sperm genome", "Blood genome")) |> 
+  # Name formatting
+  mutate(variables = str_replace(variables, "age_at_sampling", "Age")) |> 
+  mutate(variables = str_replace(variables, "sperm_conc", "Sperm count")) |> 
+  mutate(variables = str_replace(variables, "pack_years", "Pack years")) |> 
+  mutate(variables = str_replace(variables, "drinkYears", "Drink years")) |> 
+  mutate(variables = fct_relevel(variables, "Age", "BMI", "Pack years", "Drink years", "Sperm count")) |> 
+  mutate(model = if_else(model == "burden", "SNV burden", model)) |> 
+  mutate(model = if_else(model == "indelBurden", "Indel burden", model)) |> 
+  mutate(model = if_else(model == "posGeneSpermFraction", "Driver cell %", model)) |> 
+  mutate(model = if_else(model == "pathSpermFraction", "Disease cell %", model)) |> 
+  mutate(model = fct_relevel(model,"Disease cell %", "Driver cell %", "SBS19", "SBS5", "SBS1", "Indel burden", "SNV burden")) |> 
+  mutate(pAdj = p.adjust(pVal, method = "fdr")) |>
+  mutate(dir = if_else(effectSize > 0, -1, 1)) |> 
+  mutate(log10p_direction = log10(pAdj) * dir) |> 
+  mutate(sigLabel = ifelse(pAdj < .001, "***", ifelse(pAdj < .01, "**", ifelse(pAdj < .05, "*", " ")))) |> 
+  mutate(log10p_direction = if_else(log10p_direction > 20, 20, log10p_direction))
+
+
+# Extract the RdBu palette and set white at midpoint
+colors <- rev(brewer.pal(11, "RdBu"))[2:10]
+colors[5] <- "white"  # Replace the midpoint color with white
+
+p_phenoHeatmap <- ggplot(phenosFormatted, aes(x = variables, y = model, fill = log10p_direction, label = sigLabel)) +
+  geom_tile() +
+  geom_text() +
+  scale_fill_gradientn(colors = colors,
+                       name = "-log10 (P-value) with sign  \nshowing direction of effect   ",
+                       values = scales::rescale(c(-20, 0, max(phenosFormatted$log10p_direction, na.rm = TRUE))),
+                       limits = c(-20, NA)) + 
+  labs(x = "Joint predictors", y = "Outcomes") +
+  theme_pubr() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_text(size = 10),
+    strip.background = element_rect(fill = "white")  # Set strip background to white
+  ) +
+  facet_wrap(~ nanoseq, scales = "free_y", ncol = 1)
+
+p_phenoHeatmap
+
+
+png(paste0(outputPath, "extended/FigExt7_PhenoCorrelation.png"), height = 6, width = 5, res = 300, units = "in")
+p_phenoHeatmap
+dev.off()
+pdf(paste0(outputPath, "extended/FigExt7_PhenoCorrelation.pdf"), height = 6, width = 5, onefile = F)
+p_phenoHeatmap
+dev.off()
+```
