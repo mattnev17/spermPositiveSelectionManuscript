@@ -9,12 +9,13 @@ Sequencing data was processed using the NanoSeq scripts at https://github.com/ca
 ## Plotting
 Code to generate all figures is found in 
 - `TwinsUK_sperm_figures.Rmd`
+Note some figures were aesthetically edited in Illustrator post R.
 
 ## Data
 ### Sequencing data
 Raw sequencing data will be available on the European Genome–Phenome Archive, accession number TBD.
 ### Publically available data
-Input files for plotting that are publically shareable are available in `data` folder.
+Input files for plotting that are publically shareable are available in `dataPublic` folder. These files are currently being reviewed by twinsUK to confirm they are suitable to share publically.
 ### Controlled access data
 Input files for plotting that cannot be shared publically are accessible only through TwinsUK, as specified below:
 
