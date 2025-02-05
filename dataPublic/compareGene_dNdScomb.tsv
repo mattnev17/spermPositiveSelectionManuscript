@@ -1,0 +1,121 @@
+gene_name	test	Significant
+AR	BasePairCov	Restrictedhypothesis
+AR	BasePairCov +CpGmeth	Restrictedhypothesis
+AR	BasePairCov +CpGmeth +Penta	Restrictedhypothesis
+ARHGAP35	BasePairCov	Exome-wide
+ARHGAP35	BasePairCov +CpGmeth	Exome-wide
+ARHGAP35	BasePairCov +CpGmeth +Penta	Exome-wide
+ARID1A	BasePairCov	Exome-wide
+ARID1A	BasePairCov +CpGmeth	Exome-wide
+ARID1A	BasePairCov +CpGmeth +Penta	Exome-wide
+BMPR2	BasePairCov	Exome-wide
+BMPR2	BasePairCov +CpGmeth	Exome-wide
+BMPR2	BasePairCov +CpGmeth +Penta	Exome-wide
+BRAF	BasePairCov	Exome-wide
+BRAF	BasePairCov +CpGmeth	Exome-wide
+BRAF	BasePairCov +CpGmeth +Penta	Exome-wide
+CBL	BasePairCov	Exome-wide
+CBL	BasePairCov +CpGmeth	Exome-wide
+CBL	BasePairCov +CpGmeth +Penta	Exome-wide
+CCAR2	BasePairCov	Exome-wide
+CCAR2	BasePairCov +CpGmeth	Exome-wide
+CCAR2	BasePairCov +CpGmeth +Penta	Exome-wide
+CSNK2B	BasePairCov	Exome-wide
+CSNK2B	BasePairCov +CpGmeth	Exome-wide
+CSNK2B	BasePairCov +CpGmeth +Penta	Exome-wide
+CTNNB1	BasePairCov	Restrictedhypothesis
+CTNNB1	BasePairCov +CpGmeth	Restrictedhypothesis
+CTNNB1	BasePairCov +CpGmeth +Penta	Restrictedhypothesis
+CUL3	BasePairCov	Exome-wide
+CUL3	BasePairCov +CpGmeth	Exome-wide
+CUL3	BasePairCov +CpGmeth +Penta	Exome-wide
+DDX3X	BasePairCov	Exome-wide
+DDX3X	BasePairCov +CpGmeth	Exome-wide
+DDX3X	BasePairCov +CpGmeth +Penta	Exome-wide
+DHX9	BasePairCov	Exome-wide
+DHX9	BasePairCov +CpGmeth	Exome-wide
+DHX9	BasePairCov +CpGmeth +Penta	Exome-wide
+EP300	BasePairCov	Exome-wide
+EP300	BasePairCov +CpGmeth	Exome-wide
+EP300	BasePairCov +CpGmeth +Penta	Exome-wide
+FAM222B	BasePairCov	NS
+FAM222B	BasePairCov +CpGmeth	Exome-wide
+FAM222B	BasePairCov +CpGmeth +Penta	NS
+FAT1	BasePairCov	Restrictedhypothesis
+FAT1	BasePairCov +CpGmeth	Exome-wide
+FAT1	BasePairCov +CpGmeth +Penta	NS
+FGFR2	BasePairCov	Exome-wide
+FGFR2	BasePairCov +CpGmeth	Exome-wide
+FGFR2	BasePairCov +CpGmeth +Penta	Exome-wide
+FGFR3	BasePairCov	Exome-wide
+FGFR3	BasePairCov +CpGmeth	Exome-wide
+FGFR3	BasePairCov +CpGmeth +Penta	Exome-wide
+HRAS	BasePairCov	Exome-wide
+HRAS	BasePairCov +CpGmeth	Exome-wide
+HRAS	BasePairCov +CpGmeth +Penta	Exome-wide
+KDM5B	BasePairCov	Exome-wide
+KDM5B	BasePairCov +CpGmeth	Exome-wide
+KDM5B	BasePairCov +CpGmeth +Penta	Exome-wide
+KDM5C	BasePairCov	Restrictedhypothesis
+KDM5C	BasePairCov +CpGmeth	Restrictedhypothesis
+KDM5C	BasePairCov +CpGmeth +Penta	Restrictedhypothesis
+KMT2D	BasePairCov	Restrictedhypothesis
+KMT2D	BasePairCov +CpGmeth	Restrictedhypothesis
+KMT2D	BasePairCov +CpGmeth +Penta	Restrictedhypothesis
+KMT2E	BasePairCov	Exome-wide
+KMT2E	BasePairCov +CpGmeth	Exome-wide
+KMT2E	BasePairCov +CpGmeth +Penta	Exome-wide
+KRAS	BasePairCov	Exome-wide
+KRAS	BasePairCov +CpGmeth	Exome-wide
+KRAS	BasePairCov +CpGmeth +Penta	Exome-wide
+LZTR1	BasePairCov	Exome-wide
+LZTR1	BasePairCov +CpGmeth	Exome-wide
+LZTR1	BasePairCov +CpGmeth +Penta	Exome-wide
+MIB1	BasePairCov	Exome-wide
+MIB1	BasePairCov +CpGmeth	Exome-wide
+MIB1	BasePairCov +CpGmeth +Penta	Exome-wide
+NF1	BasePairCov	Exome-wide
+NF1	BasePairCov +CpGmeth	Exome-wide
+NF1	BasePairCov +CpGmeth +Penta	Exome-wide
+NSD1	BasePairCov	Exome-wide
+NSD1	BasePairCov +CpGmeth	Exome-wide
+NSD1	BasePairCov +CpGmeth +Penta	Exome-wide
+PPM1D	BasePairCov	Exome-wide
+PPM1D	BasePairCov +CpGmeth	Exome-wide
+PPM1D	BasePairCov +CpGmeth +Penta	Exome-wide
+PRRC2A	BasePairCov	Exome-wide
+PRRC2A	BasePairCov +CpGmeth	Exome-wide
+PRRC2A	BasePairCov +CpGmeth +Penta	Exome-wide
+PTEN	BasePairCov	Exome-wide
+PTEN	BasePairCov +CpGmeth	Exome-wide
+PTEN	BasePairCov +CpGmeth +Penta	Exome-wide
+PTPN11	BasePairCov	Exome-wide
+PTPN11	BasePairCov +CpGmeth	Exome-wide
+PTPN11	BasePairCov +CpGmeth +Penta	Exome-wide
+RASA2	BasePairCov	Exome-wide
+RASA2	BasePairCov +CpGmeth	Exome-wide
+RASA2	BasePairCov +CpGmeth +Penta	Exome-wide
+RBM12	BasePairCov	Exome-wide
+RBM12	BasePairCov +CpGmeth	Exome-wide
+RBM12	BasePairCov +CpGmeth +Penta	Exome-wide
+RIT1	BasePairCov	Exome-wide
+RIT1	BasePairCov +CpGmeth	Exome-wide
+RIT1	BasePairCov +CpGmeth +Penta	Exome-wide
+ROBO1	BasePairCov	Exome-wide
+ROBO1	BasePairCov +CpGmeth	Exome-wide
+ROBO1	BasePairCov +CpGmeth +Penta	Exome-wide
+SCAF4	BasePairCov	Exome-wide
+SCAF4	BasePairCov +CpGmeth	Exome-wide
+SCAF4	BasePairCov +CpGmeth +Penta	Exome-wide
+SMAD6	BasePairCov	Exome-wide
+SMAD6	BasePairCov +CpGmeth	Exome-wide
+SMAD6	BasePairCov +CpGmeth +Penta	Exome-wide
+SSX1	BasePairCov	Exome-wide
+SSX1	BasePairCov +CpGmeth	Exome-wide
+SSX1	BasePairCov +CpGmeth +Penta	Exome-wide
+TCF12	BasePairCov	Exome-wide
+TCF12	BasePairCov +CpGmeth	Exome-wide
+TCF12	BasePairCov +CpGmeth +Penta	Exome-wide
+TRERF1	BasePairCov	NS
+TRERF1	BasePairCov +CpGmeth	Exome-wide
+TRERF1	BasePairCov +CpGmeth +Penta	NS
